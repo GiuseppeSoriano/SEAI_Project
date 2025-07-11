@@ -105,7 +105,7 @@ In this work, we focus on two representative algorithms: **NSGA-II** (a Pareto-b
 * **Crowding distance diversity:** It uses a **crowding distance** metric to maintain solution diversity along the Pareto front, eliminating the need for a sharing parameter.
 * **Simple parameter set:** NSGA-II does not introduce new parameters beyond the standard genetic algorithm ones (population size, crossover/mutation rates, etc.), making it easy to implement and tune.
 
-**Pareto Ranking (Non-dominated Sorting):** In NSGA-II, the population is sorted into layers (Front 1, Front 2, etc.) based on dominance. Front 1 consists of all **non-dominated** individuals (Pareto-optimal within the population). Front 2 contains individuals that are dominated by exactly one individual in Front 1, and so on. Each solution is assigned a rank (1 for the first front, 2 for the second, etc.). This ranking guides selection: lower-rank (better) fronts are prioritized for survival.
+**Pareto Ranking (Non-dominated Sorting):** In NSGA-II, the population is sorted into layers (Front 1, Front 2, etc.) based on dominance. Front 1 consists of all **non-dominated** individuals (Pareto-optimal within the population). Front 2 contains individuals that are dominated only byz individuals in Front 1, and so on. Each solution is assigned a rank (1 for the first front, 2 for the second, etc.). This ranking guides selection: lower-rank (better) fronts are prioritized for survival.
 
 **Crowding Distance:** Within each Pareto front, NSGA-II computes a crowding distance for each solution to estimate how isolated it is from its neighbors in objective space. This promotes a spread-out Pareto front. The crowding distance for a solution is the sum of normalized objective function differences between its nearest neighbors on that front. For example, if solutions in a given front are sorted by objective $m$, the crowding distance $d_i$ for solution $i$ can be calculated as:
 
@@ -122,9 +122,14 @@ where $f_{m}(i+1)$ and $f_{m}(i-1)$ are the $m$-th objective values of the neigh
 3. **Diversity Selection:** If $P_{t+1}$ has fewer than $N$ solutions after filling whole fronts up to $f_{k-1}$, sort the solutions in $f_k$ by descending crowding distance and select the most widely spaced solutions to fill the remaining slots (up to $N$). This ensures a well-distributed selection from the last included front.
 4. **Next Generation:** Discard the rest and set $P_{t+1}$ as the new parent population. Then generate $Q_{t+1}$ from $P_{t+1}$ via genetic operators and repeat.
 
-By always preferring lower-rank (non-dominated) solutions and secondarily those in less crowded regions, NSGA-II strikes a balance between **convergence** (favoring Pareto-optimal solutions) and **diversity** (covering the Pareto front evenly). Deb *et al.* report that these mechanisms allow NSGA-II to find a well-spread set of Pareto-optimal solutions in a single run [@Deb2002]. Since its introduction, NSGA-II has been widely adopted as a benchmark and has inspired many subsequent algorithms in the Pareto-based MOEA family (including extensions like NSGA-III for many-objective problems).
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.6\textwidth]{Resources/nsga2_schema.png}
+\caption{Schematic representation of the NSGA-II algorithm.}
+\label{fig:nsga2_schema}
+\end{figure}
 
-*Reference:* Deb *et al.* (2002) [@Deb2002] first described NSGA-II, demonstrating its improved performance over earlier methods on a suite of test problems. This work is considered a milestone in evolutionary multi-objective optimization.
+By always preferring lower-rank (non-dominated) solutions and secondarily those in less crowded regions, NSGA-II strikes a balance between **convergence** (favoring Pareto-optimal solutions) and **diversity** (covering the Pareto front evenly). Deb *et al.* report that these mechanisms allow NSGA-II to find a well-spread set of Pareto-optimal solutions in a single run [@Deb2002]. Since its introduction, NSGA-II has been widely adopted as a benchmark and has inspired many subsequent algorithms in the Pareto-based MOEA family (including extensions like NSGA-III for many-objective problems).
 
 ## 2.2 MOEA/D: Multi-Objective Evolutionary Algorithm based on Decomposition
 
@@ -153,8 +158,6 @@ By restricting replacement to a subproblem’s neighborhood, MOEA/D maintains di
 **Weight Vector Design and Scalarization Choice:** The performance of MOEA/D heavily depends on a good spread of weight vectors and an appropriate scalarization method for the problem at hand. If the Pareto front is convex, a uniform spread of weight vectors with the simple weighted sum may suffice to approximate the front. For problems with **non-convex fronts (e.g., ZDT2)**, using the Chebyshev approach (or other advanced methods like Penalty Boundary Intersection) is beneficial because it can locate solutions in concave regions that weighted sum would miss. In practice, MOEA/D can incorporate various scalarization techniques; the chosen two in this work (linear weighted sum and Chebyshev) provide a clear contrast in how well they handle concave trade-offs. The **Chebyshev MOEA/D** is expected to cover the Pareto front more completely on non-convex problems, whereas **Weighted-Sum MOEA/D** may struggle to find evenly distributed solutions in the non-convex middle part of the front – this is precisely the issue under investigation.
 
 MOEA/D has become a cornerstone in multi-objective optimization research. Its modular framework allows hybridization and extension; for example, researchers have studied alternative ways to update neighbors, dynamic weight adjustment, or embedding local search. The original MOEA/D formulation by Zhang and Li (2007) [@Zhang2007] demonstrated that even a straightforward decomposition (using fixed weights and basic genetic operators) is highly effective. That work opened up a new line of research into decomposition-based MOEAs, distinguishing MOEA/D as a **milestone algorithm** comparable to NSGA-II in its influence.
-
-*Reference:* Zhang and Li (2007) [@Zhang2007] introduced MOEA/D, providing experimental evidence that decomposition can be as effective as Pareto-based methods while often reducing computational complexity. Their paper remains a primary reference for decomposition-based MOEAs and discusses variants like using Tchebycheff vs. weighted sum in detail.
 
 \newpage
 # 3. Experimental Setup
@@ -215,7 +218,7 @@ These three problems collectively cover a range of Pareto front geometries—con
 
 ### NSGA-II
 
-The NSGA-II implementation provided by the instructor was used without modification. This version follows the canonical structure proposed by Deb et al. (2002), with the following components:
+The NSGA-II implementation provided by the instructor was used without conceptual modification. This version follows the canonical structure proposed by Deb et al. (2002), with the following components:
 
 - **Fast Non-Dominated Sorting**: Used to classify the population into Pareto fronts.
 - **Crowding Distance**: Used to ensure diversity within each front.
@@ -282,14 +285,14 @@ A detailed mathematical definition of these metrics, including discussion on the
 
 ## 3.5 Reproducibility
 
-All code was executed in MATLAB with modularized folder structures (`moead/`, `nsga2/`, `utility/`), allowing isolated evaluation of each method. Seeds were fixed per run, and all outputs (including final solution fronts and metric values) were saved for further inspection.
+All code was executed in MATLAB with modularized folder structures (`+kpi/`, `+moead/`, `+moead_modified/`, `+nsga2/`, `+utility/`), allowing isolated evaluation of each method. Seeds were fixed per run, and all outputs (including final solution fronts and metric values) were saved for further inspection.
 
 This consistent and transparent setup ensures both **fairness** in comparison and **reproducibility** of all results obtained in this experimental study.
 
 \newpage
 # 4. Results and Discussion
 
-This section presents the evaluation of the algorithms under comparison—NSGA-II, MOEA/D with Chebyshev scalarization, and MOEA/D with linear aggregation-on the selected benchmark problems. Each algorithm was independently executed for 30 runs, and the results were assessed in terms of convergence and diversity using a standard set of multi-objective performance indicators. The first non-dominated front obtained at the end of each run was extracted and evaluated.
+This section presents the evaluation of the algorithms under comparison on the selected benchmark problems. Each algorithm was independently executed for 30 runs, and the results were assessed in terms of convergence and diversity using a standard set of multi-objective performance indicators. The first non-dominated front obtained at the end of each run was extracted and evaluated.
 
 ## 4.1 Evaluation Metrics
 
@@ -352,24 +355,23 @@ The intuition is as follows:
 - A final rectangle closes the region between the **last point** and the **reference point**, completing the dominated area.
 - The **total hypervolume** is the **sum of the areas** of these axis-aligned rectangles.
 
-<!-- This procedure is illustrated in the following schematic representation:
-
-\begin{figure}[!htbp]
-\centering
-\includegraphics[width=0.8\textwidth]{Resources/illustrazione_cococcioni_nadir_point_alpha_alpha.jpg}
-\caption{Hypervolume computation using rectangles for bi-objective problems.}
-\label{fig:hypervolume_rectangles}
-\end{figure} -->
-
 This method is:
 
 - **Deterministic** and **fast** for $M = 2$,
 - Used in this work as a **reference computation** for two-objective problems,
 - Particularly valuable when a large number of comparisons need to be made (e.g., across multiple runs).
 
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.6\textwidth]{Resources/hv_rectangles_schema.png}
+\caption{Hypervolume computation using rectangles for bi-objective problems.}
+\label{fig:hypervolume_rectangles}
+\end{figure}
+
+\newpage
 #### 2. PlatEMO-Based Method (General Case)
 
-To ensure accurate and consistent computation of the Hypervolume (HV) across different problem dimensions, this study employs a dual-strategy method derived from the [PlatEMO](https://github.com/BIMK/PlatEMO) platform. The implementation automatically selects the most appropriate strategy depending on the dimensionality of the objective space.
+To ensure accurate and consistent computation of the Hypervolume (HV) across different problem dimensions, this study employs a dual-strategy method derived from the [PlatEMO](https://github.com/BIMK/PlatEMO) platform [@8065138]. The implementation automatically selects the most appropriate strategy depending on the dimensionality of the objective space.
 
 **Case 1: Monte Carlo Estimation for $M > 2$**
 
@@ -381,17 +383,16 @@ For problems with more than two objectives, PlatEMO adopts a Monte Carlo-based e
 $$
 HV \approx \sum_{i=1}^N \alpha_i \cdot \text{Vol}_i
 $$
-
 Where:
 
-- $\alpha_i$ accounts for the combinatorial weight of the subset in the decomposition,
-- $\text{Vol}_i$ is the estimated hypervolume contribution of the $i$-th solution.
+  - $\alpha_i$ accounts for the combinatorial weight of the subset in the decomposition,
+  - $\text{Vol}_i$ is the estimated hypervolume contribution of the $i$-th solution.
 
 This method strikes a balance between **efficiency and scalability**, making it suitable for high-dimensional problems where exact computation is prohibitively expensive. While inherently approximate, the large sample size and the analytical form of the weights ensure good accuracy for comparative evaluations.
 
 **Case 2: Exact Computation for $M = 2$ via the HSO Algorithm**
 
-When the number of objectives is two, PlatEMO [@8065138] switches to an exact hypervolume computation based on the **Hypervolume Slicing Objectives (HSO)** algorithm, originally proposed by White et al. [@1583625]. This method is particularly efficient and accurate in the bi-objective setting.
+When the number of objectives is two, PlatEMO switches to an exact hypervolume computation based on the **Hypervolume Slicing Objectives (HSO)** algorithm, originally proposed by White et al. [@1583625]. This method is particularly efficient and accurate in the bi-objective setting.
 
 The HSO algorithm operates by recursively slicing the objective space along one objective at a time and reducing the dimensionality at each step. For a minimization problem with two objectives:
 
