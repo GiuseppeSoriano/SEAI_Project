@@ -563,8 +563,8 @@ The numerical results from each of the 30 independent runs are reported per prob
 
 **ZDT1 Results:**
 
-| Algorithm          | GD     | IGD    | $\Delta$ | HV Platemo | HV Rect |
-|--------------------|--------|--------|----------|------------|---------|
+| Algorithm          | Run    | GD     | IGD      | $\Delta$   | HV Platemo | HV Rect |
+|--------------------|--------|--------|----------|------------|------------|---------|
 | moead_cheby   | 1     | 0.0004 | 0.0089 | 0.0089   | 0.8654 | 0.8654 |
 | moead_linear  | 1     | 0.0275 | 0.0086 | 0.0275   | 1.7435 | 0.8651 |
 | moead_mod_cheby | 1     | 0.0007 | 0.0111 | 0.0111   | 0.8627 | 0.8627 |
@@ -718,8 +718,8 @@ The numerical results from each of the 30 independent runs are reported per prob
 
 **ZDT2 Results:**
 
-| Algorithm          | GD     | IGD    | $\Delta$ | HV Platemo | HV Rect |
-|--------------------|--------|--------|----------|------------|---------|
+| Algorithm          | Run    | GD     | IGD      | $\Delta$   | HV Platemo | HV Rect |
+|--------------------|--------|--------|----------|------------|------------|---------|
 | moead_cheby   | 1     | 0.0003 | 0.0093 | 0.0093   | 0.5319 | 0.5319 |
 | moead_linear  | 1     | 0.0014 | 0.0166 | 0.0166   | 0.5209 | 0.5209 |
 | moead_mod_cheby | 1     | 0.0003 | 0.0105 | 0.0105   | 0.5308 | 0.5308 |
@@ -873,8 +873,8 @@ The numerical results from each of the 30 independent runs are reported per prob
 
 **ZDT3 Results:**
 
-| Algorithm          | GD     | IGD    | $\Delta$ | HV Platemo | HV Rect |
-|--------------------|--------|--------|----------|------------|---------|
+| Algorithm          | Run    | GD     | IGD      | $\Delta$   | HV Platemo | HV Rect |
+|--------------------|--------|--------|----------|------------|------------|---------|
 | moead_cheby   | 1     | 0.0025 | 0.1929 | 0.1929   | 1.3255 | 1.3255 |
 | moead_linear  | 1     | 0.0290 | 0.1940 | 0.1940   | 2.2038 | 1.3254 |
 | moead_mod_cheby | 1     | 0.0021 | 0.1936 | 0.1936   | 1.3251 | 1.3251 |
