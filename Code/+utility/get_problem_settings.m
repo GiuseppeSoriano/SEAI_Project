@@ -71,11 +71,18 @@ function [M, V, min_range, max_range] = get_problem_settings(problem_number)
             min_range = zeros(1,V);
             max_range = ones(1,V);
             
-         case 10 % VLMOP2 (from ParEGO paper)
+        case 10 % VLMOP2 (from ParEGO paper)
 		    M = 2;
             V = 2; 
             min_range = -2*ones(1, V); % x1,x2 in [-2,2]
-            max_range = +2*ones(1, V);          
+            max_range = +2*ones(1, V);       
+
+        case 11 % DTLZ1 (3 objectives)
+            M = 3;                  % Number of objectives
+            k = 0;                  % Number of distance-related variables (tipico: 5 o 10)
+            V = M + k - 1;          % Number of decision variables (es. 7 con k=5)
+            min_range = zeros(1, V);
+            max_range = ones(1, V);
             
         otherwise 
             error('Wrong problem number');

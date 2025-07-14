@@ -11,7 +11,7 @@ function hv = compute_HV_platemo(points, ref_point)
     % Note:
     %   - Uses exact computation for M=2
     %   - Uses Monte Carlo estimation for M > 2
-    
+
     hv = sum(CalHV(points, ref_point, size(points,1), 10000));  % k = N, nSample = 10,000
 end
 

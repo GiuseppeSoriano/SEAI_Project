@@ -39,8 +39,14 @@ function f  = genetic_operator(parent_chromosome, M, V, mu, mum, l_limit, u_limi
             parent_2 = randi([1, N]);
             % Make sure both the parents are not the same. 
             % Ensure that the two selected parents are not identical
-            while isequal(parent_chromosome(parent_1,:), parent_chromosome(parent_2,:))
+            max_attempts = 10000;
+            attempt = 0;
+            while isequal(parent_chromosome(parent_1,1:V), parent_chromosome(parent_2,1:V))
                 parent_2 = randi([1, N]);  % Select a new parent index in [1, N]
+                attempt = attempt + 1;
+                if attempt == max_attempts
+                    error('Max attempts reached while selecting different parents. Skipping crossover.');
+                end
             end
 
             % Get the chromosome information for each randomnly selected

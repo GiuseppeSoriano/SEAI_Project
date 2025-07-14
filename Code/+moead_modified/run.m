@@ -74,10 +74,21 @@ function A = run(pop, gen, problem_number, scalarization_type)
     % For bi-objective problems (M = 2), generate pop evenly spaced weight vectors.
     % Each lambda(i,:) defines a direction in the objective space and corresponds
     % to a subproblem. The weights are linearly distributed along the Pareto front.
-    lambda = zeros(pop, M);
-    for i = 1 : pop
-        lambda(i,1) = (i - 1) / (pop - 1);
-        lambda(i,2) = 1 - lambda(i,1);
+    % === Generazione pesi lambda in modo generico ===
+    H = 1;
+    while nchoosek(H + M - 1, M - 1) <= pop
+        H = H + 1;
+    end
+    
+    % Genera tutti i vettori di indici che sommati fanno H
+    W = [];
+    temp = zeros(1, M);
+    W = recursive_fill(W, temp, H, 1, M);
+    lambda = W / H;
+    
+    % Se troppi, ritaglia
+    if size(lambda, 1) > pop
+        lambda = lambda(1:pop, :);
     end
     
     %% Compute pairwise distances between weight vectors
@@ -224,29 +235,36 @@ function A = run(pop, gen, problem_number, scalarization_type)
         %     drawnow;
         %     pause(0.01);
     end
-    
-    
+
     %% Result
     % Save the result in ASCII text format.
-    save solution.txt chromosome -ASCII
+    save solution.txt archive -ASCII
     
     %% Visualize
     % The following is used to visualize the result if objective space
     % dimension is visualizable.
     if M == 2
-        plot(chromosome(:,V + 1),chromosome(:,V + 2),'b*'); hold on;
+        plot(archive(:,V + 1),archive(:,V + 2),'b*'); hold on;
         if ~isempty(true_pareto)
             plot(true_pareto(:,1), true_pareto(:,2), 'r-', 'LineWidth', 1.5);
-            populationname = sprintf('MOEA/D %s population', scalarization_type);
+            populationname = sprintf('MOEA/D SBX %s population', scalarization_type);
             legend(populationname, 'True Pareto front', 'Location', 'best');
         end
         hold off;
         filename = sprintf('output/moead_mod_%s.png', scalarization_type);
         saveas(gcf, filename);
     elseif M ==3
-        plot3(chromosome(:,V + 1),chromosome(:,V + 2),chromosome(:,V + 3),'*');
+        plot3(archive(:,V + 1),archive(:,V + 2),archive(:,V + 3),'*'); hold on;
+        if ~isempty(true_pareto)
+            plot3(true_pareto(:,1), true_pareto(:,2), true_pareto(:,3), 'r-', 'LineWidth', 1.5);
+            populationname = sprintf('MOEA/D SBX %s population', scalarization_type);
+            legend(populationname, 'True Pareto front', 'Location', 'best');
+        end
+        hold off;
+        filename = sprintf('output/moead_mod_%s.png', scalarization_type);
+        saveas(gcf, filename);
     end
-        
+
     %% Extract the first Pareto front (rank = 1) from the final population
     % Each row in 'chromosome' represents a solution, structured as:
     % - Columns 1 to V     : decision variables
@@ -268,4 +286,17 @@ function A = run(pop, gen, problem_number, scalarization_type)
     % Extract only the objective values from the archive
     f_objs = archive(:, V+1:V+M);
     A = f_objs;  % return archive front
+end
+
+% --- funzione helper locale (puoi metterla sotto il tuo run come subfunction) ---
+function W = recursive_fill(W, temp, left, depth, M)
+    if depth == M
+        temp(depth) = left;
+        W = [W; temp];
+    else
+        for i = 0:left
+            temp(depth) = i;
+            W = recursive_fill(W, temp, left - i, depth + 1, M);
+        end
+    end
 end

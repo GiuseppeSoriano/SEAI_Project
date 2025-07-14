@@ -122,6 +122,7 @@ function A = run(pop, gen, problem_number)
         % rank and if individuals with same rank are encountered, crowding
         % distance is compared. A lower rank and higher crowding distance is
         % the selection criteria.
+
         parent_chromosome = nsga2.tournament_selection(chromosome, pool, tour);
     
         % Perform crossover and mutation to generate offspring population.
@@ -141,7 +142,7 @@ function A = run(pop, gen, problem_number)
         offspring_chromosome = ...
             nsga2.genetic_operator(parent_chromosome, ...
             M, V, mu, mum, min_range, max_range, problem_number);
-    
+
         % Combine current population and offspring into a single
         % intermediate population saved in intermediate_chromosome (size = 2*pop)
 
@@ -188,6 +189,7 @@ function A = run(pop, gen, problem_number)
         %     figure(gcf);
         %     drawnow;
         %     pause(0.01);
+
     end
     
     %% Result
@@ -206,7 +208,12 @@ function A = run(pop, gen, problem_number)
         hold off;
         saveas(gcf, 'output/nsga2.png');
     elseif M ==3
-        plot3(chromosome(:,V + 1),chromosome(:,V + 2),chromosome(:,V + 3),'*');
+        plot3(chromosome(:,V + 1),chromosome(:,V + 2),chromosome(:,V + 3),'*'); hold on;
+        if ~isempty(true_pareto)
+            plot3(true_pareto(:,1), true_pareto(:,2), true_pareto(:,3), 'r-', 'LineWidth', 1.5);
+            legend('NSGA-II population', 'True Pareto front', 'Location', 'best');
+        end
+        saveas(gcf, 'output/nsga2.png');
     end
     
     % Extract the first Pareto front (rank = 1) from the final population.

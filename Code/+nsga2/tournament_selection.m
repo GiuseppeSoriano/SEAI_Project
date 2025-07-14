@@ -74,7 +74,9 @@ for i = 1 : pool_size
         % If a few individuals have the least rank and have maximum crowding
         % distance, select only one individual (not at random). 
         if length(max_candidate) ~= 1
-            max_candidate = max_candidate(1);
+            idx = randi(length(max_candidate));
+            max_candidate = max_candidate(idx);
+            % max_candidate = max_candidate(1);
         end
         % Add the selected individual to the mating pool
         f(i,:) = chromosome(candidate(min_candidate(max_candidate)),:);

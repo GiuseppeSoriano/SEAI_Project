@@ -98,6 +98,21 @@ function f = evaluate_objective(x, M, V, problem_number)
             end        
             f(1) = 1 - exp(-sum1);
             f(2) = 1 - exp(-sum2);
+
+        case 11  % DTLZ1 (3 objectives)
+            k = V - M + 1;
+            g = 100 * (k + sum((x(end-k+1:end) - 0.5).^2 - cos(20 * pi * (x(end-k+1:end) - 0.5))));
+            f = zeros(1, M);
+            for i = 1:M
+                product = 1;
+                for j = 1:(M - i)
+                    product = product * x(j);
+                end
+                if i > 1
+                    product = product * (1 - x(M - i + 1));
+                end
+                f(i) = 0.5 * (1 + g) * product;
+            end
     
         otherwise 
             error('Wrong problem number');

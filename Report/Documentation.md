@@ -52,9 +52,10 @@ csl: ieee.csl
 
 \vspace{20mm}
 \begin{center}
-
+    \large{\textbf{GitHub Repository} \\
+    \vspace{2mm} \url{https://github.com/GiuseppeSoriano/SEAI_Project}} 
 \end{center}
-\vspace{25mm}
+\vspace{15mm}
 
 \hrulefill
 
@@ -244,7 +245,7 @@ This MOEA/D implementation strictly follows the decomposition-based optimization
     $$
 - **Variation Operators**: Polynomial mutation applied to a parent selected from the neighborhood $B(i)$.
 - **Localized Replacement**: Offspring may replace neighboring solutions if they improve the scalarized objective with respect to their associated weight vector.
-- **Archive Management**: An archive of non-dominated solutions of size $N$ is maintained and updated at each generation. If the archive exceeds size $N$, solutions are removed based on crowding distance to preserve diversity.
+- **Archive Management**: An archive of non-dominated solutions of size \$N\$ is maintained and updated at each generation. If the archive exceeds size \$N\$, solutions are removed based on crowding distance to preserve diversity. The choice of setting the archive size to \$N\$ was made to ensure a fair comparison with NSGA-II, which does not use an external archive. However, if one wishes to experiment with an unbounded archive, as originally proposed in the official paper, it suffices to set \texttt{N\_max} = $+\infty$, in which case no pruning will occur.
 
 ### MOEA/D with Crossover
 
@@ -258,13 +259,80 @@ This variant extends the base MOEA/D algorithm by incorporating crossover in the
 - **Localized Replacement**: Same as in MOEA/D.
 - **Archive Management**: Same as in MOEA/D.
 
+### Note on Polynomial Mutation Implementation
+
+The **polynomial mutation** operator used throughout all algorithms in this study (NSGA-II, MOEA/D, MOEA/D with crossover) was adapted from the formulation originally proposed by Deb and Goyal (1996). The implementation adopted herein applies the perturbation to each decision variable individually, ensuring respect of the true variable bounds through normalization. This design choice differs from simplified textbook implementations that often assume variables are normalized to \[0, 1], which may lead to inconsistent behavior when the search space has heterogeneous scales.
+
+#### Implementation Details
+
+1. **Normalization with Respect to Bounds:**
+   For each decision variable $x_j$, the distances to the lower and upper bounds are computed and used to adjust the mutation magnitude. This ensures that the polynomial mutation operates consistently regardless of the absolute range of the decision variable.
+
+2. **Perturbation via Polynomial Distribution:**
+   A random perturbation $\Delta_q$ is computed according to the polynomial distribution controlled by the distribution index $\eta_m$, following the procedure described in Hamdan (2012). This perturbation is scaled by the width of the variable's feasible interval.
+
+3. **Bound Enforcement:**
+   After applying the mutation, the resulting variable is clamped within its prescribed bounds.
+
+This version ensures that the mutation effect scales properly with the variable's bounds, unlike simplified versions that apply the delta directly assuming normalized ranges.
+
+The snippet below exemplifies the implementation used:
+
+```matlab
+for j = 1 : V
+    r = rand(1);
+
+    % Normalize with respect to bounds
+    delta1 = (child_3(j) - l_limit(j)) / (u_limit(j) - l_limit(j));
+    delta2 = (u_limit(j) - child_3(j)) / (u_limit(j) - l_limit(j));
+
+    % Compute perturbation
+    if r <= 0.5
+        delta_q = (2*r + (1 - 2*r)*(1 - delta1)^(mum+1))^(1/(mum+1)) - 1;
+    else
+        delta_q = 1 - (2*(1 - r) + 2*(r - 0.5)*(1 - delta2)^(mum+1))^(1/(mum+1));
+    end
+
+    % Scale and apply mutation
+    child_3(j) = child_3(j) + delta_q * (u_limit(j) - l_limit(j));
+
+    % Enforce bounds
+    child_3(j) = min(max(child_3(j), l_limit(j)), u_limit(j));
+end
+```
+
+The **original NSGA-II code provided in the course materials** adopted a simplified variant of the polynomial mutation, shown below. In this version, the mutation delta is computed without normalization to the actual decision bounds, and is directly added to the current value. This approximation assumes implicitly that all variables lie in the range \[0, 1], which is not generalizable to broader decision spaces:
+
+```matlab
+% Simplified mutation (used in the provided NSGA-II code):
+for j = 1 : V
+    r = rand(1);
+    if r < 0.5
+        delta = (2*r)^(1/(mum+1)) - 1;
+    else
+        delta = 1 - (2*(1 - r))^(1/(mum+1));
+    end
+    child_3(j) = child_3(j) + delta;
+end
+```
+
+While this formulation is computationally efficient, it breaks **scale invariance** and may lead to inconsistent behavior when decision variable ranges differ or extend beyond \[0, 1].
+
+#### Motivation for the Adopted Implementation
+
+The more rigorous mutation operator was adopted uniformly across all algorithms for the following reasons:
+
+* **Consistency across decision spaces** with arbitrary variable bounds.
+* **Correctness in problem formulation** for constrained and bounded problems.
+* **Fair comparison across algorithms**, avoiding artificial differences caused by inconsistent mutation effects.
+
 
 ## 3.3 Parameter Configuration
 
 For all algorithms, the following parameters were fixed:
 
-- Population size: $N = 50$
-- Generations: $G = 1000$
+- Population size: $N = 200$
+- Generations: $G = 2000$
 - Number of independent runs: $30$ (random seed fixed from $1$ to $30$)
 - Crossover and mutation indices: $\mu = 20$, $\mu_m = 20$
 
@@ -392,22 +460,107 @@ This method strikes a balance between **efficiency and scalability**, making it 
 
 **Case 2: Exact Computation for $M = 2$ via the HSO Algorithm**
 
-When the number of objectives is two, PlatEMO switches to an exact hypervolume computation based on the **Hypervolume Slicing Objectives (HSO)** algorithm, originally proposed by White et al. [@1583625]. This method is particularly efficient and accurate in the bi-objective setting.
+The implementation of hypervolume calculation for **M = 2** in the function `compute_HV_platemo` is explicitly designed around the properties of bi-objective spaces. It simplifies the **Hypervolume Slicing Objectives (HSO)** principle, originally proposed by White et al. [@1583625], by leveraging the geometric triviality of slicing a 2D Pareto front along one objective.
 
-The HSO algorithm operates by recursively slicing the objective space along one objective at a time and reducing the dimensionality at each step. For a minimization problem with two objectives:
+The function `hypesub` operates by first sorting the points along the second objective dimension through the line:
 
-1. The approximation set is first **sorted in ascending order of the first objective**.
-2. The algorithm traverses this sorted list to generate **vertical slices**, each representing a "strip" of the hypervolume bounded in the first objective.
-3. For each slice, the remaining portion (in the second objective) is analyzed, discarding any dominated points, and the area of the resulting rectangle is computed.
-4. The total hypervolume is then obtained as the **sum of the areas of all these rectangles**.
+```matlab
+[S, i] = sortrows(A, M); 
+```
 
-More formally, this corresponds to decomposing the dominated region into a union of disjoint rectangles, each defined by two consecutive points and the reference point. The approach is **deterministic**, **non-iterative**, and efficient for two-objective problems.
+This allows constructing **vertical slabs** in the objective space, whose widths are given by the difference between consecutive points:
 
-The underlying structure of the implementation in PlatEMO reflects the key components of the original HSO algorithm as formalized by White et al. [@1583625], although the corresponding operations are embedded within the recursive MATLAB function `hypesub(...)` rather than being defined as separate functions:
+```matlab
+extrusion = S(i+1, M) - S(i, M);  % Between current and next point
+```
 
-- The generation of cross-sectional slices of the dominated region (conceptually similar to the `slice` operation) is performed via the sorting step `sortrows(A, M)`, which orders the solutions along the last objective to enable recursive slicing.
-- The logic of point insertion and pruning (analogous to the `insert` operation in the original algorithm) is implicitly handled by iteratively selecting the first `i` points in each recursive call (`S(1:i,:)`), effectively maintaining a sorted and non-dominated subset at each level.
-- The recursive traversal over objectives, which corresponds to the main `hso` procedure, is implemented through successive invocations of `hypesub`, reducing the dimensionality one objective at a time until the base case is reached (typically $M=1$ or $M=2$), where contributions can be computed exactly.
+or between the last point and the reference bound:
+
+```matlab
+extrusion = bounds(M) - S(i, M);
+```
+
+For **M = 2**, this leads to a recursive reduction into **M = 1**, where the contribution of each slab is trivially computed via the precomputed `alpha` weights:
+
+```matlab
+h(pvec(1:i)) = h(pvec(1:i)) + extrusion * alpha(i);
+```
+
+This structure, although efficient and exact for **M = 2**, inherently assumes that slices orthogonal to one axis fully characterize the dominated region in the reduced subspace. Once dimension **M = 1** is reached, contributions are accumulated directly because the intervals are scalar and ordered.
+
+This assumption fails when **M > 2**. After slicing on one dimension, the remaining **(M-1)**-dimensional space does not reduce to ordered segments but requires further handling of non-trivial Pareto subsets. The recursion:
+
+```matlab
+h = h + extrusion * hypesub(l, S(1:i, :), M-1, bounds, pvec(1:i), alpha, k);
+```
+
+naively passes the first `i` points in the sorted order without ensuring they represent valid, non-overlapping slices in the reduced subspace. In higher dimensions, dominance relations between points within the slice cannot be ignored, and these points do not generally partition the subspace cleanly. Overlaps, holes, and complex front shapes arise, which the current recursion cannot capture.
+
+Moreover, the allocation of contributions directly to indices `pvec(1:i)` becomes meaningless when slices no longer correspond to axis-aligned intervals but to irregular regions within **M-1** dimensions. This simplification would lead to incorrect volume assignments.
+
+The use of this method for **M > 2** would require redefining the recursive structure to track the Pareto dominance relations within each slice explicitly and build complex subregions recursively, something this code is not prepared to handle. As a result, the `compute_HV_platemo` method correctly switches to Monte Carlo estimation when **M > 2**.
+
+For these reasons, this method is limited to **M = 2**. A rigorous and general approach suitable for any **M** is provided in the following section, where a faithful implementation of HSO is presented.
+
+#### 3. HSO Method (General Case)
+
+The following implementation of the **Hypervolume Slicing Objectives (HSO)** method is adapted from [https://github.com/BIMK/PlatEMO/blob/master/PlatEMO/Metrics/HV.m](https://github.com/BIMK/PlatEMO/blob/master/PlatEMO/Metrics/HV.m) and provides an exact computation of the hypervolume indicator for problems with **M < 4** objectives. This method recursively decomposes the dominated region of the objective space through orthogonal **slicing** along one objective at a time. The recursion proceeds until the one-dimensional case is reached, where contributions can be computed directly. This approach reflects the original formulation proposed by White et al. (2007) for hypervolume computation.
+
+The entry point is the function `compute_HV_HSO`, which starts by normalizing the points within the **unit hypercube \[0, 1]^M**:
+
+```matlab
+fmin = min(min(points,[],1),zeros(1,M));
+fmax = ref_point;
+points = (points - fmin) ./ ((fmax - fmin));
+points(any(points > 1, 2), :) = [];
+RefPoint = ones(1, M);
+```
+
+This ensures the reference point is `[1, 1, ..., 1]` and standardizes the objective space. Points outside these bounds are discarded. If no points remain, the function returns zero hypervolume.
+
+For **M = 2**, this method essentially reduces to the **rectangle method** described earlier. Specifically, the slicing reduces to computing horizontal strips between consecutive solutions ordered on the first objective. The final contributions are integrated through differences with the reference point, matching the same intuition and geometry as the rectangle-based method.
+
+For **M = 3**, the method constructs slices recursively. The outer loop slices the objective space along the first objective, collecting slabs with thickness corresponding to differences along the first dimension. Inside each slab, the procedure repeats on the remaining dimensions via the `Slice` function.
+
+The `Slice` function performs slicing over the current dimension `k+1`:
+
+```matlab
+cell_ = {abs(p(k)-p_(k)), ql};
+```
+
+Each slice accumulates its width along dimension `k`, and the remaining points are maintained in non-dominated form through the `Insert` function, which removes dominated points in dimensions `k+1:M`. This insertion logic ensures that the recursive decomposition proceeds only on relevant subsets of points, thereby avoiding redundant contributions.
+
+At the final dimension, contributions are aggregated through:
+
+```matlab
+hv = hv + S{i,1} * abs(p(M) - RefPoint(M));
+```
+
+The recursion guarantees that contributions from each orthogonal "strip" are properly accumulated. The total hypervolume is scaled back through:
+
+```matlab
+hv = hv * prod(ref_point);
+```
+
+Thus, the method constructs the hypervolume as a sum of disjoint volumes, consistent with the theoretical formulation of HSO.
+
+It is important to note that this recursive approach cannot trivially be extended beyond **M = 3** due to the exponential growth in the number of recursive slices and the combinatorial complexity of managing non-dominated subsets at each recursion level.
+
+**Comparison with Monte Carlo Estimation**
+
+To validate this exact HSO implementation, experiments were performed on problems with **M = 3**. Results show that the **exact HSO computation closely matches the Monte Carlo-based approximation employed by PlatEMO**. The observed discrepancies between the two methods are consistently below **0.001** in hypervolume units. This confirms the correctness of the HSO implementation and the reliability of the Monte Carlo estimation when properly configured.
+
+An example of the obtained results for **30 independent runs** is reported below on the **DTLZ1** problem with **M = 3** objectives and **V=2** decision variables, a very simple problem with a known Pareto front. These results clearly show that, while small variations exist (as expected from Monte Carlo estimation), the two methods converge to similar values:
+
+| Algorithm          | GD     | IGD    | $\Delta$ | HV Platemo | HV HSO |
+|--------------------|--------|--------|----------|------------|--------|
+| moead_linear       | 0.0077 | 0.0183 | 0.0183   | 0.1900     | 0.1902 |
+| moead_cheby        | 0.0078 | 0.0185 | 0.0185   | 0.1880     | 0.1882 |
+| moead_mod_linear   | 0.0076 | 0.0192 | 0.0192   | 0.1900     | 0.1898 |
+| moead_mod_cheby    | 0.0079 | 0.0193 | 0.0193   | 0.1871     | 0.1874 |
+| nsga2              | 0.0078 | 0.0277 | 0.0277   | 0.1859     | 0.1860 |
+
+The minor differences visible in `HV_Platemo` are attributable to the stochastic nature of Monte Carlo sampling, confirming the soundness and accuracy of the HSO method for **M = 3**.
 
 ## 4.2 Results Analysis
 
@@ -415,23 +568,24 @@ The comparative evaluation of MOEA/D with Chebyshev scalarization, MOEA/D with l
 
 The following table reports the average values of each metric across the 30 runs for every algorithm and problem:
 
+\newpage
 | Problem | Algorithm          | GD     | IGD    | $\Delta$ | HV Platemo | HV Rect |
 |--------:|--------------------|--------|--------|----------|------------|---------|
-| ZDT1    | moead\_cheby       | 0.0033 | 0.0096 | 0.0103   | 0.9293     | 0.8645  |
-|         | moead\_linear      | 0.0043 | 0.0091 | 0.0112   | 0.9540     | 0.8649  |
-|         | moead\_sbx\_cheby  | 0.0033 | 0.0104 | 0.0119   | 0.9394     | 0.8632  |
-|         | moead\_sbx\_linear | 0.0004 | 0.0090 | 0.0090   | 0.8646     | 0.8646  |
-|         | nsga2              | 0.0005 | 0.0098 | 0.0098   | 0.8643     | 0.8643  |
-| ZDT2    | moead\_cheby       | 0.0031 | 0.0097 | 0.0105   | 0.5979     | 0.5316  |
-|         | moead\_linear      | 0.0011 | 0.0177 | 0.0177   | 0.5205     | 0.5205  |
-|         | moead\_sbx\_cheby  | 0.0011 | 0.0106 | 0.0110   | 0.5489     | 0.5308  |
-|         | moead\_sbx\_linear | 0.0017 | 0.0290 | 0.0290   | 0.5048     | 0.5048  |
-|         | nsga2              | 0.0004 | 0.0099 | 0.0099   | 0.5316     | 0.5316  |
-| ZDT3    | moead\_cheby       | 0.0049 | 0.1932 | 0.1932   | 1.3901     | 1.3254  |
-|         | moead\_linear      | 0.0063 | 0.1941 | 0.1941   | 1.4262     | 1.3256  |  
-|         | moead\_sbx\_cheby  | 0.0051 | 0.1937 | 0.1937   | 1.4013     | 1.3250  |  
-|         | moead\_sbx\_linear | 0.0023 | 0.1974 | 0.1974   | 1.3148     | 1.3148  |  
-|         | nsga2              | 0.0020 | 0.1946 | 0.1946   | 1.3196     | 1.3196  | 
+| ZDT1    | moead\_linear      | 0.0015 | 0.0022 | 0.0027   | 1.0004     | 0.8739  |
+|         | moead\_cheby       | 0.0018 | 0.0023 | 0.0028   | 1.0338     | 0.8738  |
+|         | moead\_sbx\_linear | 0.0004 | 0.0022 | 0.0022   | 0.8738     | 0.8738  |
+|         | moead\_sbx\_cheby  | 0.0009 | 0.0025 | 0.0026   | 0.9225     | 0.8735  |
+|         | nsga2              | 0.0006 | 0.0023 | 0.0023   | 0.8738     | 0.8738  |
+| ZDT2    | moead\_linear      | 0.0005 | 0.0060 | 0.0060   | 0.5354     | 0.5354  |
+|         | moead\_cheby       | 0.0016 | 0.0024 | 0.0029   | 0.7105     | 0.5405  |
+|         | moead\_sbx\_linear | 0.0007 | 0.0161 | 0.0161   | 0.5208     | 0.5208  |
+|         | moead\_sbx\_cheby  | 0.0005 | 0.0026 | 0.0026   | 0.5519     | 0.5403  |
+|         | nsga2              | 0.0004 | 0.0024 | 0.0024   | 0.5405     | 0.5405  |
+| ZDT3    | moead\_linear      | 0.0034 | 0.1908 | 0.1908   | 1.4654     | 1.3304  |
+|         | moead\_cheby       | 0.0035 | 0.1907 | 0.1907   | 1.5142     | 1.3304  |
+|         | moead\_sbx\_linear | 0.0022 | 0.1917 | 0.1917   | 1.3302     | 1.3302  |
+|         | moead\_sbx\_cheby  | 0.0024 | 0.1907 | 0.1907   | 1.3433     | 1.3303  |
+|         | nsga2              | 0.0023 | 0.1907 | 0.1907   | 1.3303     | 1.3303  |
 
 In the case of **ZDT1**, which features a convex and continuous Pareto front, all algorithms perform consistently well in terms of convergence and diversity. NSGA-II exhibits the best GD and $\Delta$ values, indicating its ability to place solutions very close to the true front while maintaining a uniform distribution. The modified MOEA/D with linear scalarization (`moead_sbx_linear`) performs exceptionally, achieving the best overall values across all metrics, including GD, IGD, and HV (identical across both versions). This suggests that the addition of crossover significantly mitigates the limitations of linear scalarization on convex fronts. Standard MOEA/D variants without crossover show slightly inferior IGD values, confirming the beneficial effect of recombination. Interestingly, the Hypervolume computed via PlatEMO overestimates the performance of MOEA/D-linear, likely due to better coverage near the extreme regions, while the rectangle-based HV—aligned with true front coverage—supports a more consistent ranking.
 
@@ -439,10 +593,11 @@ When we shift our focus to **ZDT2**, characterized by a **non-convex** Pareto fr
 
 The scenario becomes even more challenging with **ZDT3**, due to the **disconnected** nature of the Pareto front. Here, convergence and diversity are harder to maintain across multiple disjoint regions. All algorithms show an increase in GD and IGD as expected. NSGA-II and `moead_sbx_linear` perform best in terms of GD, with values around 0.002, suggesting better convergence to the various front segments. However, MOEA/D with Chebyshev scalarization (standard and sbx) achieves the highest Hypervolume, demonstrating its superior ability to **spread solutions** across multiple disconnected segments. Linear MOEA/D variants, while performing well in convergence (especially when combined with crossover), fail to achieve high HV values, reflecting limited diversity across all regions. This confirms that scalarization-based methods require careful design to avoid biasing solutions toward specific areas of the front.
 
-It is important to interpret the **$\Delta$ metric** carefully. By definition, $\Delta = \max(\text{GD}, \text{IGD})$ for each run. However, the table reports **average values over 30 runs**, and the reported $\Delta$ values are the mean of the per-run maximums. This means that the average $\Delta$ may not match the greater of average GD and average IGD. For example, in ZDT1 for `moead_cheby`, $\Delta = 0.0103$, which does not correspond exactly to max(0.0033, 0.0096) = 0.0096, since in some runs GD was higher, and in others IGD was. This nuance is essential for correct interpretation of aggregated results.
+It is important to interpret the **$\Delta$ metric** carefully. By definition, $\Delta = \max(\text{GD}, \text{IGD})$ for each run. However, the table reports **average values over 30 runs**, and the reported $\Delta$ values are the mean of the per-run maximums. This means that the average $\Delta$ may not match the greater of average GD and average IGD. For example, in ZDT1 for `moead_cheby`, $\Delta = 0.0028$, which does not correspond exactly to max(0.0018, 0.0023) = 0.0023, since in some runs GD was higher, and in others IGD was. This nuance is essential for correct interpretation of aggregated results.
 
 Overall, the experiments confirm theoretical expectations. **NSGA-II** consistently demonstrates strong performance across all problems due to its dominance-based selection and global elitism mechanisms. **MOEA/D with Chebyshev scalarization** adapts well to non-convex and disconnected fronts, leveraging its decomposition strategy to maintain spread and diversity. The **addition of crossover** (SBX) in MOEA/D proves beneficial, especially for linear scalarization, where it compensates for the inability to handle non-convexity and improves performance even on convex and discontinuous problems. **MOEA/D with linear scalarization**, while effective on ZDT1, consistently underperforms on ZDT2 and ZDT3 due to its intrinsic limitation in spanning the entire front geometry, unless recombination is introduced to increase diversity.
 
+\newpage
 ### Visual Comparison of Pareto Fronts
 
 The graphical analysis includes a series of plots that compare the true Pareto front (shown in red) with the non-dominated solutions obtained by each algorithm. For each benchmark problem, three images are shown—one per algorithm—allowing direct visual inspection of coverage and convergence.
@@ -490,7 +645,12 @@ These plots provide valuable qualitative support to the numerical metrics, espec
         \caption*{ZDT3 - MOEA/D-Linear}
     \end{minipage}
 
-    \vspace{0.8cm}
+    \caption{Comparison of final Pareto front approximations obtained by each algorithm on ZDT1–ZDT3. (1/2)}
+    \label{fig:pareto_fronts_grid}
+\end{figure}
+
+\begin{figure}[!htbp]
+
 
     \begin{minipage}{0.32\textwidth}
         \centering
@@ -510,11 +670,8 @@ These plots provide valuable qualitative support to the numerical metrics, espec
         \caption*{ZDT3 - MOEA/D-Chebyshev with SBX Crossover}
     \end{minipage}
 
-    \caption{Comparison of final Pareto front approximations obtained by each algorithm on ZDT1–ZDT3. (1/2)}
-    \label{fig:pareto_fronts_grid}
-\end{figure}
+    \vspace{0.8cm}
 
-\begin{figure}[!htbp]
     \begin{minipage}{0.32\textwidth}
         \centering
         \includegraphics[width=\linewidth]{Resources/ZDT1_moead_mod_linear.png}
@@ -563,468 +720,624 @@ The numerical results from each of the 30 independent runs are reported per prob
 
 **ZDT1 Results:**
 
-| Algorithm          | Run    | GD     | IGD      | $\Delta$   | HV Platemo | HV Rect |
-|--------------------|--------|--------|----------|------------|------------|---------|
-| moead_cheby   | 1     | 0.0004 | 0.0089 | 0.0089   | 0.8654 | 0.8654 |
-| moead_linear  | 1     | 0.0275 | 0.0086 | 0.0275   | 1.7435 | 0.8651 |
-| moead_mod_cheby | 1     | 0.0007 | 0.0111 | 0.0111   | 0.8627 | 0.8627 |
-| moead_mod_linear | 1     | 0.0006 | 0.0089 | 0.0089   | 0.8649 | 0.8649 |
-| nsga2         | 1     | 0.0004 | 0.0115 | 0.0115   | 0.8627 | 0.8627 |
-| moead_cheby   | 2     | 0.0073 | 0.0095 | 0.0095   | 0.9997 | 0.8646 |
-| moead_linear  | 2     | 0.0334 | 0.0104 | 0.0334   | 1.3073 | 0.8622 |
-| moead_mod_cheby | 2     | 0.0007 | 0.0090 | 0.0090   | 0.8654 | 0.8654 |
-| moead_mod_linear | 2     | 0.0004 | 0.0088 | 0.0088   | 0.8646 | 0.8646 |
-| nsga2         | 2     | 0.0004 | 0.0097 | 0.0097   | 0.8644 | 0.8644 |
-| moead_cheby   | 3     | 0.0009 | 0.0096 | 0.0096   | 0.8646 | 0.8646 |
-| moead_linear  | 3     | 0.0009 | 0.0095 | 0.0095   | 0.8638 | 0.8638 |
-| moead_mod_cheby | 3     | 0.0005 | 0.0106 | 0.0106   | 0.8629 | 0.8629 |
-| moead_mod_linear | 3     | 0.0006 | 0.0094 | 0.0094   | 0.8628 | 0.8628 |
-| nsga2         | 3     | 0.0005 | 0.0097 | 0.0097   | 0.8641 | 0.8641 |
-| moead_cheby   | 4     | 0.0008 | 0.0098 | 0.0098   | 0.8643 | 0.8643 |
-| moead_linear  | 4     | 0.0004 | 0.0101 | 0.0101   | 0.8640 | 0.8640 |
-| moead_mod_cheby | 4     | 0.0005 | 0.0104 | 0.0104   | 0.8635 | 0.8635 |
-| moead_mod_linear | 4     | 0.0006 | 0.0088 | 0.0088   | 0.8652 | 0.8652 |
-| nsga2         | 4     | 0.0004 | 0.0092 | 0.0092   | 0.8651 | 0.8651 |
-| moead_cheby   | 5     | 0.0009 | 0.0108 | 0.0108   | 0.8633 | 0.8633 |
-| moead_linear  | 5     | 0.0316 | 0.0093 | 0.0316   | 1.8530 | 0.8643 |
-| moead_mod_cheby | 5     | 0.0004 | 0.0108 | 0.0108   | 0.8628 | 0.8628 |
-| moead_mod_linear | 5     | 0.0003 | 0.0091 | 0.0091   | 0.8644 | 0.8644 |
-| nsga2         | 5     | 0.0004 | 0.0096 | 0.0096   | 0.8645 | 0.8645 |
-| moead_cheby   | 6     | 0.0275 | 0.0107 | 0.0275   | 1.3721 | 0.8630 |
-| moead_linear  | 6     | 0.0011 | 0.0098 | 0.0098   | 0.8632 | 0.8632 |
-| moead_mod_cheby | 6     | 0.0007 | 0.0105 | 0.0105   | 0.8633 | 0.8633 |
-| moead_mod_linear | 6     | 0.0003 | 0.0090 | 0.0090   | 0.8650 | 0.8650 |
-| nsga2         | 6     | 0.0005 | 0.0099 | 0.0099   | 0.8644 | 0.8644 |
-| moead_cheby   | 7     | 0.0010 | 0.0091 | 0.0091   | 0.8651 | 0.8651 |
-| moead_linear  | 7     | 0.0005 | 0.0090 | 0.0090   | 0.8654 | 0.8654 |
-| moead_mod_cheby | 7     | 0.0005 | 0.0107 | 0.0107   | 0.8629 | 0.8629 |
-| moead_mod_linear | 7     | 0.0003 | 0.0095 | 0.0095   | 0.8635 | 0.8635 |
-| nsga2         | 7     | 0.0006 | 0.0102 | 0.0102   | 0.8642 | 0.8642 |
-| moead_cheby   | 8     | 0.0013 | 0.0092 | 0.0092   | 0.8651 | 0.8651 |
-| moead_linear  | 8     | 0.0045 | 0.0087 | 0.0087   | 0.9799 | 0.8655 |
-| moead_mod_cheby | 8     | 0.0005 | 0.0100 | 0.0100   | 0.8636 | 0.8636 |
-| moead_mod_linear | 8     | 0.0003 | 0.0087 | 0.0087   | 0.8650 | 0.8650 |
-| nsga2         | 8     | 0.0004 | 0.0099 | 0.0099   | 0.8642 | 0.8642 |
-| moead_cheby   | 9     | 0.0027 | 0.0103 | 0.0103   | 0.8754 | 0.8640 |
-| moead_linear  | 9     | 0.0006 | 0.0101 | 0.0101   | 0.8643 | 0.8643 |
-| moead_mod_cheby | 9     | 0.0008 | 0.0100 | 0.0100   | 0.8635 | 0.8635 |
-| moead_mod_linear | 9     | 0.0003 | 0.0092 | 0.0092   | 0.8636 | 0.8636 |
-| nsga2         | 9     | 0.0003 | 0.0097 | 0.0097   | 0.8645 | 0.8645 |
-| moead_cheby   | 10    | 0.0005 | 0.0092 | 0.0092   | 0.8652 | 0.8652 |
-| moead_linear  | 10    | 0.0004 | 0.0090 | 0.0090   | 0.8651 | 0.8651 |
-| moead_mod_cheby | 10    | 0.0004 | 0.0106 | 0.0106   | 0.8631 | 0.8631 |
-| moead_mod_linear | 10    | 0.0005 | 0.0086 | 0.0086   | 0.8652 | 0.8652 |
-| nsga2         | 10    | 0.0004 | 0.0096 | 0.0096   | 0.8647 | 0.8647 |
-| moead_cheby   | 11    | 0.0014 | 0.0098 | 0.0098   | 0.8645 | 0.8645 |
-| moead_linear  | 11    | 0.0013 | 0.0090 | 0.0090   | 0.8651 | 0.8651 |
-| moead_mod_cheby | 11    | 0.0007 | 0.0121 | 0.0121   | 0.8610 | 0.8610 |
-| moead_mod_linear | 11    | 0.0003 | 0.0092 | 0.0092   | 0.8646 | 0.8646 |
-| nsga2         | 11    | 0.0004 | 0.0104 | 0.0104   | 0.8637 | 0.8637 |
-| moead_cheby   | 12    | 0.0008 | 0.0098 | 0.0098   | 0.8641 | 0.8641 |
-| moead_linear  | 12    | 0.0009 | 0.0094 | 0.0094   | 0.8649 | 0.8649 |
-| moead_mod_cheby | 12    | 0.0006 | 0.0110 | 0.0110   | 0.8627 | 0.8627 |
-| moead_mod_linear | 12    | 0.0006 | 0.0091 | 0.0091   | 0.8638 | 0.8638 |
-| nsga2         | 12    | 0.0004 | 0.0090 | 0.0090   | 0.8651 | 0.8651 |
-| moead_cheby   | 13    | 0.0009 | 0.0094 | 0.0094   | 0.8648 | 0.8648 |
-| moead_linear  | 13    | 0.0005 | 0.0088 | 0.0088   | 0.8653 | 0.8653 |
-| moead_mod_cheby | 13    | 0.0008 | 0.0104 | 0.0104   | 0.8632 | 0.8632 |
-| moead_mod_linear | 13    | 0.0004 | 0.0093 | 0.0093   | 0.8645 | 0.8645 |
-| nsga2         | 13    | 0.0004 | 0.0093 | 0.0093   | 0.8648 | 0.8648 |
-| moead_cheby   | 14    | 0.0130 | 0.0092 | 0.0130   | 1.1061 | 0.8647 |
-| moead_linear  | 14    | 0.0012 | 0.0092 | 0.0092   | 0.8648 | 0.8648 |
-| moead_mod_cheby | 14    | 0.0150 | 0.0101 | 0.0150   | 1.5339 | 0.8633 |
-| moead_mod_linear | 14    | 0.0006 | 0.0091 | 0.0091   | 0.8651 | 0.8651 |
-| nsga2         | 14    | 0.0004 | 0.0099 | 0.0099   | 0.8637 | 0.8637 |
-| moead_cheby   | 15    | 0.0096 | 0.0093 | 0.0096   | 1.2545 | 0.8650 |
-| moead_linear  | 15    | 0.0019 | 0.0088 | 0.0088   | 0.8654 | 0.8654 |
-| moead_mod_cheby | 15    | 0.0030 | 0.0109 | 0.0109   | 0.8626 | 0.8626 |
-| moead_mod_linear | 15    | 0.0004 | 0.0082 | 0.0082   | 0.8661 | 0.8661 |
-| nsga2         | 15    | 0.0005 | 0.0101 | 0.0101   | 0.8642 | 0.8642 |
-| moead_cheby   | 16    | 0.0061 | 0.0094 | 0.0094   | 1.0354 | 0.8652 |
-| moead_linear  | 16    | 0.0012 | 0.0087 | 0.0087   | 0.8654 | 0.8654 |
-| moead_mod_cheby | 16    | 0.0006 | 0.0092 | 0.0092   | 0.8648 | 0.8648 |
-| moead_mod_linear | 16    | 0.0004 | 0.0095 | 0.0095   | 0.8646 | 0.8646 |
-| nsga2         | 16    | 0.0004 | 0.0097 | 0.0097   | 0.8645 | 0.8645 |
-| moead_cheby   | 17    | 0.0006 | 0.0088 | 0.0088   | 0.8654 | 0.8654 |
-| moead_linear  | 17    | 0.0009 | 0.0087 | 0.0087   | 0.8655 | 0.8655 |
-| moead_mod_cheby | 17    | 0.0052 | 0.0099 | 0.0099   | 1.0149 | 0.8639 |
-| moead_mod_linear | 17    | 0.0005 | 0.0090 | 0.0090   | 0.8653 | 0.8653 |
-| nsga2         | 17    | 0.0006 | 0.0108 | 0.0108   | 0.8631 | 0.8631 |
-| moead_cheby   | 18    | 0.0016 | 0.0098 | 0.0098   | 0.8639 | 0.8639 |
-| moead_linear  | 18    | 0.0004 | 0.0085 | 0.0085   | 0.8660 | 0.8660 |
-| moead_mod_cheby | 18    | 0.0006 | 0.0098 | 0.0098   | 0.8642 | 0.8642 |
-| moead_mod_linear | 18    | 0.0004 | 0.0087 | 0.0087   | 0.8658 | 0.8658 |
-| nsga2         | 18    | 0.0006 | 0.0104 | 0.0104   | 0.8637 | 0.8637 |
-| moead_cheby   | 19    | 0.0007 | 0.0105 | 0.0105   | 0.8633 | 0.8633 |
-| moead_linear  | 19    | 0.0009 | 0.0086 | 0.0086   | 0.8656 | 0.8656 |
-| moead_mod_cheby | 19    | 0.0006 | 0.0099 | 0.0099   | 0.8639 | 0.8639 |
-| moead_mod_linear | 19    | 0.0004 | 0.0087 | 0.0087   | 0.8653 | 0.8653 |
-| nsga2         | 19    | 0.0012 | 0.0093 | 0.0093   | 0.8649 | 0.8649 |
-| moead_cheby   | 20    | 0.0006 | 0.0092 | 0.0092   | 0.8654 | 0.8654 |
-| moead_linear  | 20    | 0.0005 | 0.0087 | 0.0087   | 0.8656 | 0.8656 |
-| moead_mod_cheby | 20    | 0.0226 | 0.0094 | 0.0226   | 1.4570 | 0.8645 |
-| moead_mod_linear | 20    | 0.0003 | 0.0090 | 0.0090   | 0.8642 | 0.8642 |
-| nsga2         | 20    | 0.0006 | 0.0105 | 0.0105   | 0.8640 | 0.8640 |
-| moead_cheby   | 21    | 0.0017 | 0.0091 | 0.0091   | 0.8652 | 0.8652 |
-| moead_linear  | 21    | 0.0004 | 0.0087 | 0.0087   | 0.8657 | 0.8657 |
-| moead_mod_cheby | 21    | 0.0358 | 0.0111 | 0.0358   | 1.7339 | 0.8618 |
-| moead_mod_linear | 21    | 0.0004 | 0.0090 | 0.0090   | 0.8640 | 0.8640 |
-| nsga2         | 21    | 0.0005 | 0.0095 | 0.0095   | 0.8646 | 0.8646 |
-| moead_cheby   | 22    | 0.0011 | 0.0103 | 0.0103   | 0.8633 | 0.8633 |
-| moead_linear  | 22    | 0.0013 | 0.0090 | 0.0090   | 0.8650 | 0.8650 |
-| moead_mod_cheby | 22    | 0.0007 | 0.0113 | 0.0113   | 0.8622 | 0.8622 |
-| moead_mod_linear | 22    | 0.0006 | 0.0095 | 0.0095   | 0.8644 | 0.8644 |
-| nsga2         | 22    | 0.0005 | 0.0089 | 0.0089   | 0.8653 | 0.8653 |
-| moead_cheby   | 23    | 0.0005 | 0.0107 | 0.0107   | 0.8631 | 0.8631 |
-| moead_linear  | 23    | 0.0020 | 0.0090 | 0.0090   | 0.8649 | 0.8649 |
-| moead_mod_cheby | 23    | 0.0012 | 0.0108 | 0.0108   | 0.8632 | 0.8632 |
-| moead_mod_linear | 23    | 0.0006 | 0.0090 | 0.0090   | 0.8648 | 0.8648 |
-| nsga2         | 23    | 0.0005 | 0.0100 | 0.0100   | 0.8641 | 0.8641 |
-| moead_cheby   | 24    | 0.0014 | 0.0100 | 0.0100   | 0.8644 | 0.8644 |
-| moead_linear  | 24    | 0.0018 | 0.0089 | 0.0089   | 0.8653 | 0.8653 |
-| moead_mod_cheby | 24    | 0.0008 | 0.0099 | 0.0099   | 0.8642 | 0.8642 |
-| moead_mod_linear | 24    | 0.0003 | 0.0089 | 0.0089   | 0.8655 | 0.8655 |
-| nsga2         | 24    | 0.0005 | 0.0090 | 0.0090   | 0.8648 | 0.8648 |
-| moead_cheby   | 25    | 0.0010 | 0.0087 | 0.0087   | 0.8651 | 0.8651 |
-| moead_linear  | 25    | 0.0007 | 0.0093 | 0.0093   | 0.8636 | 0.8636 |
-| moead_mod_cheby | 25    | 0.0018 | 0.0109 | 0.0109   | 0.8631 | 0.8631 |
-| moead_mod_linear | 25    | 0.0005 | 0.0091 | 0.0091   | 0.8637 | 0.8637 |
-| nsga2         | 25    | 0.0004 | 0.0101 | 0.0101   | 0.8641 | 0.8641 |
-| moead_cheby   | 26    | 0.0009 | 0.0092 | 0.0092   | 0.8650 | 0.8650 |
-| moead_linear  | 26    | 0.0071 | 0.0090 | 0.0090   | 1.1119 | 0.8649 |
-| moead_mod_cheby | 26    | 0.0004 | 0.0112 | 0.0112   | 0.8624 | 0.8624 |
-| moead_mod_linear | 26    | 0.0003 | 0.0091 | 0.0091   | 0.8644 | 0.8644 |
-| nsga2         | 26    | 0.0004 | 0.0103 | 0.0103   | 0.8638 | 0.8638 |
-| moead_cheby   | 27    | 0.0009 | 0.0092 | 0.0092   | 0.8651 | 0.8651 |
-| moead_linear  | 27    | 0.0006 | 0.0088 | 0.0088   | 0.8657 | 0.8657 |
-| moead_mod_cheby | 27    | 0.0006 | 0.0102 | 0.0102   | 0.8636 | 0.8636 |
-| moead_mod_linear | 27    | 0.0005 | 0.0094 | 0.0094   | 0.8638 | 0.8638 |
-| nsga2         | 27    | 0.0004 | 0.0096 | 0.0096   | 0.8639 | 0.8639 |
-| moead_cheby   | 28    | 0.0009 | 0.0094 | 0.0094   | 0.8645 | 0.8645 |
-| moead_linear  | 28    | 0.0005 | 0.0086 | 0.0086   | 0.8657 | 0.8657 |
-| moead_mod_cheby | 28    | 0.0005 | 0.0110 | 0.0110   | 0.8619 | 0.8619 |
-| moead_mod_linear | 28    | 0.0003 | 0.0088 | 0.0088   | 0.8642 | 0.8642 |
-| nsga2         | 28    | 0.0010 | 0.0100 | 0.0100   | 0.8638 | 0.8638 |
-| moead_cheby   | 29    | 0.0113 | 0.0099 | 0.0113   | 1.3505 | 0.8641 |
-| moead_linear  | 29    | 0.0015 | 0.0098 | 0.0098   | 0.8645 | 0.8645 |
-| moead_mod_cheby | 29    | 0.0005 | 0.0113 | 0.0113   | 0.8624 | 0.8624 |
-| moead_mod_linear | 29    | 0.0003 | 0.0086 | 0.0086   | 0.8651 | 0.8651 |
-| nsga2         | 29    | 0.0005 | 0.0089 | 0.0089   | 0.8652 | 0.8652 |
-| moead_cheby   | 30    | 0.0006 | 0.0092 | 0.0092   | 0.8651 | 0.8651 |
-| moead_linear  | 30    | 0.0013 | 0.0092 | 0.0092   | 0.8650 | 0.8650 |
-| moead_mod_cheby | 30    | 0.0007 | 0.0097 | 0.0097   | 0.8643 | 0.8643 |
-| moead_mod_linear | 30    | 0.0004 | 0.0083 | 0.0083   | 0.8660 | 0.8660 |
-| nsga2         | 30    | 0.0004 | 0.0098 | 0.0098   | 0.8641 | 0.8641 |
+| Algorithm          | Run    | GD     | IGD      | $\Delta$   | HV Platemo | HV Rect | HV HSO |
+|--------------------|--------|--------|----------|------------|------------|---------|--------|
+| moead_linear  | 1     | 0.0013 | 0.0022 | 0.0022   | 0.9412 | 0.8739 | 0.8739 |
+| moead_cheby   | 1     | 0.0006 | 0.0023 | 0.0023   | 0.8738 | 0.8738 | 0.8738 |
+| moead_mod_linear | 1     | 0.0005 | 0.0021 | 0.0021   | 0.8740 | 0.8740 | 0.8740 |
+| moead_mod_cheby | 1     | 0.0006 | 0.0024 | 0.0024   | 0.8736 | 0.8736 | 0.8736 |
+| nsga2         | 1     | 0.0006 | 0.0024 | 0.0024   | 0.8736 | 0.8736 | 0.8736 |
+| moead_linear  | 2     | 0.0005 | 0.0022 | 0.0022   | 0.8739 | 0.8739 | 0.8739 |
+| moead_cheby   | 2     | 0.0006 | 0.0023 | 0.0023   | 0.8738 | 0.8738 | 0.8738 |
+| moead_mod_linear | 2     | 0.0004 | 0.0022 | 0.0022   | 0.8738 | 0.8738 | 0.8738 |
+| moead_mod_cheby | 2     | 0.0006 | 0.0025 | 0.0025   | 0.8736 | 0.8736 | 0.8736 |
+| nsga2         | 2     | 0.0006 | 0.0023 | 0.0023   | 0.8737 | 0.8737 | 0.8737 |
+| moead_linear  | 3     | 0.0085 | 0.0022 | 0.0085   | 1.6637 | 0.8738 | 0.8738 |
+| moead_cheby   | 3     | 0.0006 | 0.0023 | 0.0023   | 0.8738 | 0.8738 | 0.8738 |
+| moead_mod_linear | 3     | 0.0005 | 0.0023 | 0.0023   | 0.8736 | 0.8736 | 0.8736 |
+| moead_mod_cheby | 3     | 0.0006 | 0.0023 | 0.0023   | 0.8737 | 0.8737 | 0.8737 |
+| nsga2         | 3     | 0.0006 | 0.0023 | 0.0023   | 0.8738 | 0.8738 | 0.8738 |
+| moead_linear  | 4     | 0.0024 | 0.0022 | 0.0024   | 1.1677 | 0.8738 | 0.8738 |
+| moead_cheby   | 4     | 0.0006 | 0.0023 | 0.0023   | 0.8737 | 0.8737 | 0.8737 |
+| moead_mod_linear | 4     | 0.0004 | 0.0021 | 0.0021   | 0.8739 | 0.8739 | 0.8739 |
+| moead_mod_cheby | 4     | 0.0006 | 0.0025 | 0.0025   | 0.8735 | 0.8735 | 0.8735 |
+| nsga2         | 4     | 0.0005 | 0.0022 | 0.0022   | 0.8739 | 0.8739 | 0.8739 |
+| moead_linear  | 5     | 0.0005 | 0.0022 | 0.0022   | 0.8739 | 0.8739 | 0.8739 |
+| moead_cheby   | 5     | 0.0007 | 0.0022 | 0.0022   | 0.8739 | 0.8739 | 0.8739 |
+| moead_mod_linear | 5     | 0.0004 | 0.0023 | 0.0023   | 0.8735 | 0.8735 | 0.8735 |
+| moead_mod_cheby | 5     | 0.0006 | 0.0028 | 0.0028   | 0.8731 | 0.8731 | 0.8731 |
+| nsga2         | 5     | 0.0006 | 0.0024 | 0.0024   | 0.8737 | 0.8737 | 0.8737 |
+| moead_linear  | 6     | 0.0015 | 0.0023 | 0.0023   | 0.9724 | 0.8738 | 0.8738 |
+| moead_cheby   | 6     | 0.0030 | 0.0022 | 0.0030   | 1.1305 | 0.8739 | 0.8739 |
+| moead_mod_linear | 6     | 0.0004 | 0.0021 | 0.0021   | 0.8739 | 0.8739 | 0.8739 |
+| moead_mod_cheby | 6     | 0.0006 | 0.0024 | 0.0024   | 0.8736 | 0.8736 | 0.8736 |
+| nsga2         | 6     | 0.0005 | 0.0023 | 0.0023   | 0.8738 | 0.8738 | 0.8738 |
+| moead_linear  | 7     | 0.0006 | 0.0022 | 0.0022   | 0.8740 | 0.8740 | 0.8740 |
+| moead_cheby   | 7     | 0.0007 | 0.0022 | 0.0022   | 0.8740 | 0.8740 | 0.8740 |
+| moead_mod_linear | 7     | 0.0005 | 0.0021 | 0.0021   | 0.8739 | 0.8739 | 0.8739 |
+| moead_mod_cheby | 7     | 0.0006 | 0.0025 | 0.0025   | 0.8735 | 0.8735 | 0.8735 |
+| nsga2         | 7     | 0.0006 | 0.0023 | 0.0023   | 0.8738 | 0.8738 | 0.8738 |
+| moead_linear  | 8     | 0.0047 | 0.0022 | 0.0047   | 1.6160 | 0.8738 | 0.8738 |
+| moead_cheby   | 8     | 0.0006 | 0.0022 | 0.0022   | 0.8738 | 0.8738 | 0.8738 |
+| moead_mod_linear | 8     | 0.0005 | 0.0023 | 0.0023   | 0.8738 | 0.8738 | 0.8738 |
+| moead_mod_cheby | 8     | 0.0006 | 0.0025 | 0.0025   | 0.8735 | 0.8735 | 0.8735 |
+| nsga2         | 8     | 0.0006 | 0.0023 | 0.0023   | 0.8738 | 0.8738 | 0.8738 |
+| moead_linear  | 9     | 0.0006 | 0.0022 | 0.0022   | 0.8739 | 0.8739 | 0.8739 |
+| moead_cheby   | 9     | 0.0033 | 0.0022 | 0.0033   | 1.1417 | 0.8738 | 0.8738 |
+| moead_mod_linear | 9     | 0.0004 | 0.0021 | 0.0021   | 0.8739 | 0.8739 | 0.8739 |
+| moead_mod_cheby | 9     | 0.0006 | 0.0024 | 0.0024   | 0.8737 | 0.8737 | 0.8737 |
+| nsga2         | 9     | 0.0006 | 0.0023 | 0.0023   | 0.8738 | 0.8738 | 0.8738 |
+| moead_linear  | 10    | 0.0006 | 0.0022 | 0.0022   | 0.8740 | 0.8740 | 0.8740 |
+| moead_cheby   | 10    | 0.0020 | 0.0022 | 0.0022   | 1.0936 | 0.8739 | 0.8739 |
+| moead_mod_linear | 10    | 0.0005 | 0.0022 | 0.0022   | 0.8737 | 0.8737 | 0.8737 |
+| moead_mod_cheby | 10    | 0.0006 | 0.0025 | 0.0025   | 0.8735 | 0.8735 | 0.8735 |
+| nsga2         | 10    | 0.0006 | 0.0022 | 0.0022   | 0.8738 | 0.8738 | 0.8738 |
+| moead_linear  | 11    | 0.0005 | 0.0022 | 0.0022   | 0.8740 | 0.8740 | 0.8740 |
+| moead_cheby   | 11    | 0.0007 | 0.0022 | 0.0022   | 0.8738 | 0.8738 | 0.8738 |
+| moead_mod_linear | 11    | 0.0004 | 0.0023 | 0.0023   | 0.8735 | 0.8735 | 0.8735 |
+| moead_mod_cheby | 11    | 0.0014 | 0.0025 | 0.0025   | 0.9292 | 0.8735 | 0.8735 |
+| nsga2         | 11    | 0.0006 | 0.0023 | 0.0023   | 0.8738 | 0.8738 | 0.8738 |
+| moead_linear  | 12    | 0.0006 | 0.0023 | 0.0023   | 0.8739 | 0.8739 | 0.8739 |
+| moead_cheby   | 12    | 0.0024 | 0.0023 | 0.0024   | 0.9040 | 0.8738 | 0.8738 |
+| moead_mod_linear | 12    | 0.0005 | 0.0022 | 0.0022   | 0.8739 | 0.8739 | 0.8739 |
+| moead_mod_cheby | 12    | 0.0006 | 0.0024 | 0.0024   | 0.8736 | 0.8736 | 0.8736 |
+| nsga2         | 12    | 0.0006 | 0.0024 | 0.0024   | 0.8737 | 0.8737 | 0.8737 |
+| moead_linear  | 13    | 0.0006 | 0.0021 | 0.0021   | 0.8740 | 0.8740 | 0.8740 |
+| moead_cheby   | 13    | 0.0018 | 0.0022 | 0.0022   | 1.0645 | 0.8738 | 0.8738 |
+| moead_mod_linear | 13    | 0.0004 | 0.0021 | 0.0021   | 0.8739 | 0.8739 | 0.8739 |
+| moead_mod_cheby | 13    | 0.0041 | 0.0025 | 0.0041   | 1.2163 | 0.8735 | 0.8735 |
+| nsga2         | 13    | 0.0006 | 0.0024 | 0.0024   | 0.8737 | 0.8737 | 0.8737 |
+| moead_linear  | 14    | 0.0004 | 0.0021 | 0.0021   | 0.8740 | 0.8740 | 0.8740 |
+| moead_cheby   | 14    | 0.0029 | 0.0022 | 0.0029   | 1.2716 | 0.8738 | 0.8738 |
+| moead_mod_linear | 14    | 0.0005 | 0.0021 | 0.0021   | 0.8740 | 0.8740 | 0.8740 |
+| moead_mod_cheby | 14    | 0.0006 | 0.0024 | 0.0024   | 0.8737 | 0.8737 | 0.8737 |
+| nsga2         | 14    | 0.0006 | 0.0022 | 0.0022   | 0.8739 | 0.8739 | 0.8739 |
+| moead_linear  | 15    | 0.0006 | 0.0022 | 0.0022   | 0.8739 | 0.8739 | 0.8739 |
+| moead_cheby   | 15    | 0.0006 | 0.0023 | 0.0023   | 0.8738 | 0.8738 | 0.8738 |
+| moead_mod_linear | 15    | 0.0004 | 0.0021 | 0.0021   | 0.8739 | 0.8739 | 0.8739 |
+| moead_mod_cheby | 15    | 0.0007 | 0.0023 | 0.0023   | 0.8737 | 0.8737 | 0.8737 |
+| nsga2         | 15    | 0.0005 | 0.0023 | 0.0023   | 0.8739 | 0.8739 | 0.8739 |
+| moead_linear  | 16    | 0.0005 | 0.0021 | 0.0021   | 0.8739 | 0.8739 | 0.8739 |
+| moead_cheby   | 16    | 0.0025 | 0.0022 | 0.0025   | 1.2033 | 0.8739 | 0.8739 |
+| moead_mod_linear | 16    | 0.0005 | 0.0022 | 0.0022   | 0.8738 | 0.8738 | 0.8738 |
+| moead_mod_cheby | 16    | 0.0006 | 0.0026 | 0.0026   | 0.8734 | 0.8734 | 0.8734 |
+| nsga2         | 16    | 0.0006 | 0.0023 | 0.0023   | 0.8738 | 0.8738 | 0.8738 |
+| moead_linear  | 17    | 0.0005 | 0.0022 | 0.0022   | 0.8738 | 0.8738 | 0.8738 |
+| moead_cheby   | 17    | 0.0011 | 0.0022 | 0.0022   | 0.8738 | 0.8738 | 0.8738 |
+| moead_mod_linear | 17    | 0.0004 | 0.0021 | 0.0021   | 0.8739 | 0.8739 | 0.8739 |
+| moead_mod_cheby | 17    | 0.0006 | 0.0024 | 0.0024   | 0.8736 | 0.8736 | 0.8736 |
+| nsga2         | 17    | 0.0005 | 0.0025 | 0.0025   | 0.8737 | 0.8737 | 0.8737 |
+| moead_linear  | 18    | 0.0005 | 0.0021 | 0.0021   | 0.8739 | 0.8739 | 0.8739 |
+| moead_cheby   | 18    | 0.0006 | 0.0023 | 0.0023   | 0.8738 | 0.8738 | 0.8738 |
+| moead_mod_linear | 18    | 0.0004 | 0.0021 | 0.0021   | 0.8739 | 0.8739 | 0.8739 |
+| moead_mod_cheby | 18    | 0.0006 | 0.0024 | 0.0024   | 0.8736 | 0.8736 | 0.8736 |
+| nsga2         | 18    | 0.0006 | 0.0025 | 0.0025   | 0.8736 | 0.8736 | 0.8736 |
+| moead_linear  | 19    | 0.0006 | 0.0022 | 0.0022   | 0.8738 | 0.8738 | 0.8738 |
+| moead_cheby   | 19    | 0.0020 | 0.0023 | 0.0023   | 1.0779 | 0.8738 | 0.8738 |
+| moead_mod_linear | 19    | 0.0006 | 0.0021 | 0.0021   | 0.8740 | 0.8740 | 0.8740 |
+| moead_mod_cheby | 19    | 0.0006 | 0.0023 | 0.0023   | 0.8737 | 0.8737 | 0.8737 |
+| nsga2         | 19    | 0.0005 | 0.0024 | 0.0024   | 0.8737 | 0.8737 | 0.8737 |
+| moead_linear  | 20    | 0.0067 | 0.0023 | 0.0067   | 1.8562 | 0.8737 | 0.8737 |
+| moead_cheby   | 20    | 0.0060 | 0.0022 | 0.0060   | 1.6925 | 0.8738 | 0.8738 |
+| moead_mod_linear | 20    | 0.0004 | 0.0022 | 0.0022   | 0.8739 | 0.8739 | 0.8739 |
+| moead_mod_cheby | 20    | 0.0005 | 0.0025 | 0.0025   | 0.8735 | 0.8735 | 0.8735 |
+| nsga2         | 20    | 0.0005 | 0.0023 | 0.0023   | 0.8738 | 0.8738 | 0.8738 |
+| moead_linear  | 21    | 0.0052 | 0.0022 | 0.0052   | 1.1948 | 0.8739 | 0.8739 |
+| moead_cheby   | 21    | 0.0007 | 0.0024 | 0.0024   | 0.8737 | 0.8737 | 0.8737 |
+| moead_mod_linear | 21    | 0.0005 | 0.0023 | 0.0023   | 0.8737 | 0.8737 | 0.8737 |
+| moead_mod_cheby | 21    | 0.0007 | 0.0025 | 0.0025   | 0.8735 | 0.8735 | 0.8735 |
+| nsga2         | 21    | 0.0006 | 0.0025 | 0.0025   | 0.8736 | 0.8736 | 0.8736 |
+| moead_linear  | 22    | 0.0006 | 0.0022 | 0.0022   | 0.8740 | 0.8740 | 0.8740 |
+| moead_cheby   | 22    | 0.0075 | 0.0022 | 0.0075   | 1.7303 | 0.8739 | 0.8739 |
+| moead_mod_linear | 22    | 0.0004 | 0.0021 | 0.0021   | 0.8739 | 0.8739 | 0.8739 |
+| moead_mod_cheby | 22    | 0.0006 | 0.0026 | 0.0026   | 0.8734 | 0.8734 | 0.8734 |
+| nsga2         | 22    | 0.0005 | 0.0023 | 0.0023   | 0.8738 | 0.8738 | 0.8738 |
+| moead_linear  | 23    | 0.0021 | 0.0022 | 0.0022   | 1.0965 | 0.8739 | 0.8739 |
+| moead_cheby   | 23    | 0.0006 | 0.0022 | 0.0022   | 0.8739 | 0.8739 | 0.8739 |
+| moead_mod_linear | 23    | 0.0005 | 0.0021 | 0.0021   | 0.8739 | 0.8739 | 0.8739 |
+| moead_mod_cheby | 23    | 0.0006 | 0.0025 | 0.0025   | 0.8736 | 0.8736 | 0.8736 |
+| nsga2         | 23    | 0.0005 | 0.0024 | 0.0024   | 0.8737 | 0.8737 | 0.8737 |
+| moead_linear  | 24    | 0.0005 | 0.0022 | 0.0022   | 0.8739 | 0.8739 | 0.8739 |
+| moead_cheby   | 24    | 0.0046 | 0.0024 | 0.0046   | 1.2803 | 0.8736 | 0.8736 |
+| moead_mod_linear | 24    | 0.0004 | 0.0022 | 0.0022   | 0.8738 | 0.8738 | 0.8738 |
+| moead_mod_cheby | 24    | 0.0006 | 0.0024 | 0.0024   | 0.8736 | 0.8736 | 0.8736 |
+| nsga2         | 24    | 0.0006 | 0.0023 | 0.0023   | 0.8738 | 0.8738 | 0.8738 |
+| moead_linear  | 25    | 0.0005 | 0.0022 | 0.0022   | 0.8739 | 0.8739 | 0.8739 |
+| moead_cheby   | 25    | 0.0006 | 0.0025 | 0.0025   | 0.8735 | 0.8735 | 0.8735 |
+| moead_mod_linear | 25    | 0.0004 | 0.0020 | 0.0020   | 0.8740 | 0.8740 | 0.8740 |
+| moead_mod_cheby | 25    | 0.0059 | 0.0024 | 0.0059   | 1.9446 | 0.8735 | 0.8735 |
+| nsga2         | 25    | 0.0005 | 0.0025 | 0.0025   | 0.8735 | 0.8735 | 0.8735 |
+| moead_linear  | 26    | 0.0014 | 0.0021 | 0.0021   | 0.9903 | 0.8739 | 0.8739 |
+| moead_cheby   | 26    | 0.0006 | 0.0023 | 0.0023   | 0.8737 | 0.8737 | 0.8737 |
+| moead_mod_linear | 26    | 0.0004 | 0.0022 | 0.0022   | 0.8738 | 0.8738 | 0.8738 |
+| moead_mod_cheby | 26    | 0.0006 | 0.0024 | 0.0024   | 0.8737 | 0.8737 | 0.8737 |
+| nsga2         | 26    | 0.0006 | 0.0023 | 0.0023   | 0.8738 | 0.8738 | 0.8738 |
+| moead_linear  | 27    | 0.0006 | 0.0023 | 0.0023   | 0.8739 | 0.8739 | 0.8739 |
+| moead_cheby   | 27    | 0.0005 | 0.0022 | 0.0022   | 0.8739 | 0.8739 | 0.8739 |
+| moead_mod_linear | 27    | 0.0005 | 0.0021 | 0.0021   | 0.8740 | 0.8740 | 0.8740 |
+| moead_mod_cheby | 27    | 0.0006 | 0.0025 | 0.0025   | 0.8735 | 0.8735 | 0.8735 |
+| nsga2         | 27    | 0.0006 | 0.0025 | 0.0025   | 0.8736 | 0.8736 | 0.8736 |
+| moead_linear  | 28    | 0.0006 | 0.0022 | 0.0022   | 0.8739 | 0.8739 | 0.8739 |
+| moead_cheby   | 28    | 0.0047 | 0.0023 | 0.0047   | 1.6954 | 0.8737 | 0.8737 |
+| moead_mod_linear | 28    | 0.0005 | 0.0022 | 0.0022   | 0.8738 | 0.8738 | 0.8738 |
+| moead_mod_cheby | 28    | 0.0007 | 0.0025 | 0.0025   | 0.8735 | 0.8735 | 0.8735 |
+| nsga2         | 28    | 0.0006 | 0.0024 | 0.0024   | 0.8737 | 0.8737 | 0.8737 |
+| moead_linear  | 29    | 0.0005 | 0.0022 | 0.0022   | 0.8740 | 0.8740 | 0.8740 |
+| moead_cheby   | 29    | 0.0006 | 0.0024 | 0.0024   | 0.8736 | 0.8736 | 0.8736 |
+| moead_mod_linear | 29    | 0.0004 | 0.0022 | 0.0022   | 0.8738 | 0.8738 | 0.8738 |
+| moead_mod_cheby | 29    | 0.0006 | 0.0027 | 0.0027   | 0.8732 | 0.8732 | 0.8732 |
+| nsga2         | 29    | 0.0006 | 0.0023 | 0.0023   | 0.8739 | 0.8739 | 0.8739 |
+| moead_linear  | 30    | 0.0017 | 0.0022 | 0.0022   | 1.0341 | 0.8739 | 0.8739 |
+| moead_cheby   | 30    | 0.0006 | 0.0023 | 0.0023   | 0.8738 | 0.8738 | 0.8738 |
+| moead_mod_linear | 30    | 0.0004 | 0.0022 | 0.0022   | 0.8738 | 0.8738 | 0.8738 |
+| moead_mod_cheby | 30    | 0.0007 | 0.0024 | 0.0024   | 0.8736 | 0.8736 | 0.8736 |
+| nsga2         | 30    | 0.0006 | 0.0022 | 0.0022   | 0.8739 | 0.8739 | 0.8739 |
+
 
 **ZDT2 Results:**
 
-| Algorithm          | Run    | GD     | IGD      | $\Delta$   | HV Platemo | HV Rect |
-|--------------------|--------|--------|----------|------------|------------|---------|
-| moead_cheby   | 1     | 0.0003 | 0.0093 | 0.0093   | 0.5319 | 0.5319 |
-| moead_linear  | 1     | 0.0014 | 0.0166 | 0.0166   | 0.5209 | 0.5209 |
-| moead_mod_cheby | 1     | 0.0003 | 0.0105 | 0.0105   | 0.5308 | 0.5308 |
-| moead_mod_linear | 1     | 0.0004 | 0.0089 | 0.0089   | 0.5324 | 0.5324 |
-| nsga2         | 1     | 0.0003 | 0.0101 | 0.0101   | 0.5310 | 0.5310 |
-| moead_cheby   | 2     | 0.0061 | 0.0101 | 0.0101   | 0.6665 | 0.5314 |
-| moead_linear  | 2     | 0.0004 | 0.0377 | 0.0377   | 0.4975 | 0.4975 |
-| moead_mod_cheby | 2     | 0.0004 | 0.0110 | 0.0110   | 0.5307 | 0.5307 |
-| moead_mod_linear | 2     | 0.0020 | 0.0111 | 0.0111   | 0.5281 | 0.5281 |
-| nsga2         | 2     | 0.0004 | 0.0096 | 0.0096   | 0.5313 | 0.5313 |
-| moead_cheby   | 3     | 0.0004 | 0.0097 | 0.0097   | 0.5318 | 0.5318 |
-| moead_linear  | 3     | 0.0004 | 0.0095 | 0.0095   | 0.5319 | 0.5319 |
-| moead_mod_cheby | 3     | 0.0004 | 0.0100 | 0.0100   | 0.5313 | 0.5313 |
-| moead_mod_linear | 3     | 0.0058 | 0.0484 | 0.0484   | 0.4711 | 0.4711 |
-| nsga2         | 3     | 0.0004 | 0.0097 | 0.0097   | 0.5317 | 0.5317 |
-| moead_cheby   | 4     | 0.0006 | 0.0098 | 0.0098   | 0.5317 | 0.5317 |
-| moead_linear  | 4     | 0.0005 | 0.0089 | 0.0089   | 0.5319 | 0.5319 |
-| moead_mod_cheby | 4     | 0.0003 | 0.0102 | 0.0102   | 0.5314 | 0.5314 |
-| moead_mod_linear | 4     | 0.0042 | 0.0260 | 0.0260   | 0.5105 | 0.5105 |
-| nsga2         | 4     | 0.0004 | 0.0095 | 0.0095   | 0.5318 | 0.5318 |
-| moead_cheby   | 5     | 0.0006 | 0.0098 | 0.0098   | 0.5320 | 0.5320 |
-| moead_linear  | 5     | 0.0004 | 0.0229 | 0.0229   | 0.5145 | 0.5145 |
-| moead_mod_cheby | 5     | 0.0004 | 0.0109 | 0.0109   | 0.5303 | 0.5303 |
-| moead_mod_linear | 5     | 0.0005 | 0.0094 | 0.0094   | 0.5315 | 0.5315 |
-| nsga2         | 5     | 0.0004 | 0.0094 | 0.0094   | 0.5319 | 0.5319 |
-| moead_cheby   | 6     | 0.0276 | 0.0106 | 0.0276   | 1.0393 | 0.5302 |
-| moead_linear  | 6     | 0.0006 | 0.0113 | 0.0113   | 0.5296 | 0.5296 |
-| moead_mod_cheby | 6     | 0.0004 | 0.0099 | 0.0099   | 0.5315 | 0.5315 |
-| moead_mod_linear | 6     | 0.0012 | 0.0095 | 0.0095   | 0.5309 | 0.5309 |
-| nsga2         | 6     | 0.0003 | 0.0102 | 0.0102   | 0.5319 | 0.5319 |
-| moead_cheby   | 7     | 0.0010 | 0.0111 | 0.0111   | 0.5299 | 0.5299 |
-| moead_linear  | 7     | 0.0040 | 0.0465 | 0.0465   | 0.4830 | 0.4830 |
-| moead_mod_cheby | 7     | 0.0004 | 0.0104 | 0.0104   | 0.5312 | 0.5312 |
-| moead_mod_linear | 7     | 0.0012 | 0.0299 | 0.0299   | 0.5076 | 0.5076 |
-| nsga2         | 7     | 0.0004 | 0.0095 | 0.0095   | 0.5316 | 0.5316 |
-| moead_cheby   | 8     | 0.0017 | 0.0105 | 0.0105   | 0.5292 | 0.5292 |
-| moead_linear  | 8     | 0.0003 | 0.0334 | 0.0334   | 0.5037 | 0.5037 |
-| moead_mod_cheby | 8     | 0.0004 | 0.0100 | 0.0100   | 0.5311 | 0.5311 |
-| moead_mod_linear | 8     | 0.0034 | 0.0563 | 0.0563   | 0.4633 | 0.4633 |
-| nsga2         | 8     | 0.0003 | 0.0094 | 0.0094   | 0.5320 | 0.5320 |
-| moead_cheby   | 9     | 0.0026 | 0.0104 | 0.0104   | 0.5434 | 0.5320 |
-| moead_linear  | 9     | 0.0011 | 0.0106 | 0.0106   | 0.5299 | 0.5299 |
-| moead_mod_cheby | 9     | 0.0004 | 0.0094 | 0.0094   | 0.5320 | 0.5320 |
-| moead_mod_linear | 9     | 0.0012 | 0.0261 | 0.0261   | 0.5107 | 0.5107 |
-| nsga2         | 9     | 0.0003 | 0.0106 | 0.0106   | 0.5315 | 0.5315 |
-| moead_cheby   | 10    | 0.0004 | 0.0093 | 0.0093   | 0.5319 | 0.5319 |
-| moead_linear  | 10    | 0.0004 | 0.0107 | 0.0107   | 0.5310 | 0.5310 |
-| moead_mod_cheby | 10    | 0.0004 | 0.0100 | 0.0100   | 0.5310 | 0.5310 |
-| moead_mod_linear | 10    | 0.0018 | 0.0132 | 0.0132   | 0.5264 | 0.5264 |
-| nsga2         | 10    | 0.0003 | 0.0096 | 0.0096   | 0.5320 | 0.5320 |
-| moead_cheby   | 11    | 0.0012 | 0.0091 | 0.0091   | 0.5320 | 0.5320 |
-| moead_linear  | 11    | 0.0009 | 0.0273 | 0.0273   | 0.5036 | 0.5036 |
-| moead_mod_cheby | 11    | 0.0004 | 0.0114 | 0.0114   | 0.5316 | 0.5316 |
-| moead_mod_linear | 11    | 0.0022 | 0.0146 | 0.0146   | 0.5230 | 0.5230 |
-| nsga2         | 11    | 0.0004 | 0.0105 | 0.0105   | 0.5308 | 0.5308 |
-| moead_cheby   | 12    | 0.0009 | 0.0098 | 0.0098   | 0.5317 | 0.5317 |
-| moead_linear  | 12    | 0.0006 | 0.0101 | 0.0101   | 0.5316 | 0.5316 |
-| moead_mod_cheby | 12    | 0.0004 | 0.0098 | 0.0098   | 0.5314 | 0.5314 |
-| moead_mod_linear | 12    | 0.0005 | 0.0147 | 0.0147   | 0.5268 | 0.5268 |
-| nsga2         | 12    | 0.0004 | 0.0106 | 0.0106   | 0.5325 | 0.5325 |
-| moead_cheby   | 13    | 0.0004 | 0.0099 | 0.0099   | 0.5313 | 0.5313 |
-| moead_linear  | 13    | 0.0004 | 0.0249 | 0.0249   | 0.5114 | 0.5114 |
-| moead_mod_cheby | 13    | 0.0003 | 0.0119 | 0.0119   | 0.5295 | 0.5295 |
-| moead_mod_linear | 13    | 0.0019 | 0.0489 | 0.0489   | 0.4734 | 0.4734 |
-| nsga2         | 13    | 0.0003 | 0.0097 | 0.0097   | 0.5311 | 0.5311 |
-| moead_cheby   | 14    | 0.0135 | 0.0093 | 0.0135   | 0.7781 | 0.5314 |
-| moead_linear  | 14    | 0.0004 | 0.0174 | 0.0174   | 0.5211 | 0.5211 |
-| moead_mod_cheby | 14    | 0.0213 | 0.0108 | 0.0213   | 1.0735 | 0.5298 |
-| moead_mod_linear | 14    | 0.0004 | 0.0091 | 0.0091   | 0.5318 | 0.5318 |
-| nsga2         | 14    | 0.0003 | 0.0109 | 0.0109   | 0.5318 | 0.5318 |
-| moead_cheby   | 15    | 0.0103 | 0.0098 | 0.0103   | 0.9601 | 0.5320 |
-| moead_linear  | 15    | 0.0007 | 0.0096 | 0.0096   | 0.5311 | 0.5311 |
-| moead_mod_cheby | 15    | 0.0004 | 0.0108 | 0.0108   | 0.5309 | 0.5309 |
-| moead_mod_linear | 15    | 0.0066 | 0.0215 | 0.0215   | 0.5131 | 0.5131 |
-| nsga2         | 15    | 0.0004 | 0.0098 | 0.0098   | 0.5320 | 0.5320 |
-| moead_cheby   | 16    | 0.0059 | 0.0109 | 0.0109   | 0.6999 | 0.5296 |
-| moead_linear  | 16    | 0.0029 | 0.0314 | 0.0314   | 0.4968 | 0.4968 |
-| moead_mod_cheby | 16    | 0.0003 | 0.0104 | 0.0104   | 0.5303 | 0.5303 |
-| moead_mod_linear | 16    | 0.0004 | 0.0106 | 0.0106   | 0.5311 | 0.5311 |
-| nsga2         | 16    | 0.0008 | 0.0103 | 0.0103   | 0.5301 | 0.5301 |
-| moead_cheby   | 17    | 0.0005 | 0.0088 | 0.0088   | 0.5328 | 0.5328 |
-| moead_linear  | 17    | 0.0011 | 0.0093 | 0.0093   | 0.5312 | 0.5312 |
-| moead_mod_cheby | 17    | 0.0004 | 0.0105 | 0.0105   | 0.5304 | 0.5304 |
-| moead_mod_linear | 17    | 0.0004 | 0.0700 | 0.0700   | 0.4577 | 0.4577 |
-| nsga2         | 17    | 0.0004 | 0.0107 | 0.0107   | 0.5310 | 0.5310 |
-| moead_cheby   | 18    | 0.0004 | 0.0086 | 0.0086   | 0.5329 | 0.5329 |
-| moead_linear  | 18    | 0.0045 | 0.0200 | 0.0200   | 0.5158 | 0.5158 |
-| moead_mod_cheby | 18    | 0.0004 | 0.0105 | 0.0105   | 0.5303 | 0.5303 |
-| moead_mod_linear | 18    | 0.0015 | 0.0819 | 0.0819   | 0.4366 | 0.4366 |
-| nsga2         | 18    | 0.0003 | 0.0103 | 0.0103   | 0.5318 | 0.5318 |
-| moead_cheby   | 19    | 0.0007 | 0.0091 | 0.0091   | 0.5320 | 0.5320 |
-| moead_linear  | 19    | 0.0005 | 0.0097 | 0.0097   | 0.5326 | 0.5326 |
-| moead_mod_cheby | 19    | 0.0003 | 0.0106 | 0.0106   | 0.5314 | 0.5314 |
-| moead_mod_linear | 19    | 0.0020 | 0.0626 | 0.0626   | 0.4518 | 0.4518 |
-| nsga2         | 19    | 0.0004 | 0.0099 | 0.0099   | 0.5317 | 0.5317 |
-| moead_cheby   | 20    | 0.0005 | 0.0095 | 0.0095   | 0.5321 | 0.5321 |
-| moead_linear  | 20    | 0.0006 | 0.0178 | 0.0178   | 0.5211 | 0.5211 |
-| moead_mod_cheby | 20    | 0.0006 | 0.0111 | 0.0111   | 0.5304 | 0.5304 |
-| moead_mod_linear | 20    | 0.0024 | 0.0418 | 0.0418   | 0.4830 | 0.4830 |
-| nsga2         | 20    | 0.0004 | 0.0090 | 0.0090   | 0.5323 | 0.5323 |
-| moead_cheby   | 21    | 0.0013 | 0.0089 | 0.0089   | 0.5327 | 0.5327 |
-| moead_linear  | 21    | 0.0005 | 0.0216 | 0.0216   | 0.5159 | 0.5159 |
-| moead_mod_cheby | 21    | 0.0003 | 0.0106 | 0.0106   | 0.5305 | 0.5305 |
-| moead_mod_linear | 21    | 0.0004 | 0.0415 | 0.0415   | 0.4894 | 0.4894 |
-| nsga2         | 21    | 0.0005 | 0.0097 | 0.0097   | 0.5316 | 0.5316 |
-| moead_cheby   | 22    | 0.0006 | 0.0094 | 0.0094   | 0.5323 | 0.5323 |
-| moead_linear  | 22    | 0.0012 | 0.0166 | 0.0166   | 0.5209 | 0.5209 |
-| moead_mod_cheby | 22    | 0.0004 | 0.0109 | 0.0109   | 0.5302 | 0.5302 |
-| moead_mod_linear | 22    | 0.0009 | 0.0103 | 0.0103   | 0.5291 | 0.5291 |
-| nsga2         | 22    | 0.0004 | 0.0100 | 0.0100   | 0.5311 | 0.5311 |
-| moead_cheby   | 23    | 0.0005 | 0.0111 | 0.0111   | 0.5306 | 0.5306 |
-| moead_linear  | 23    | 0.0006 | 0.0112 | 0.0112   | 0.5290 | 0.5290 |
-| moead_mod_cheby | 23    | 0.0006 | 0.0117 | 0.0117   | 0.5299 | 0.5299 |
-| moead_mod_linear | 23    | 0.0010 | 0.0130 | 0.0130   | 0.5261 | 0.5261 |
-| nsga2         | 23    | 0.0004 | 0.0094 | 0.0094   | 0.5317 | 0.5317 |
-| moead_cheby   | 24    | 0.0013 | 0.0093 | 0.0093   | 0.5319 | 0.5319 |
-| moead_linear  | 24    | 0.0010 | 0.0169 | 0.0169   | 0.5193 | 0.5193 |
-| moead_mod_cheby | 24    | 0.0004 | 0.0109 | 0.0109   | 0.5301 | 0.5301 |
-| moead_mod_linear | 24    | 0.0018 | 0.0436 | 0.0436   | 0.4773 | 0.4773 |
-| nsga2         | 24    | 0.0004 | 0.0095 | 0.0095   | 0.5320 | 0.5320 |
-| moead_cheby   | 25    | 0.0008 | 0.0099 | 0.0099   | 0.5313 | 0.5313 |
-| moead_linear  | 25    | 0.0007 | 0.0115 | 0.0115   | 0.5289 | 0.5289 |
-| moead_mod_cheby | 25    | 0.0004 | 0.0104 | 0.0104   | 0.5309 | 0.5309 |
-| moead_mod_linear | 25    | 0.0007 | 0.0890 | 0.0890   | 0.4393 | 0.4393 |
-| nsga2         | 25    | 0.0004 | 0.0094 | 0.0094   | 0.5324 | 0.5324 |
-| moead_cheby   | 26    | 0.0008 | 0.0090 | 0.0090   | 0.5324 | 0.5324 |
-| moead_linear  | 26    | 0.0011 | 0.0105 | 0.0105   | 0.5304 | 0.5304 |
-| moead_mod_cheby | 26    | 0.0004 | 0.0102 | 0.0102   | 0.5308 | 0.5308 |
-| moead_mod_linear | 26    | 0.0004 | 0.0100 | 0.0100   | 0.5308 | 0.5308 |
-| nsga2         | 26    | 0.0004 | 0.0099 | 0.0099   | 0.5319 | 0.5319 |
-| moead_cheby   | 27    | 0.0005 | 0.0108 | 0.0108   | 0.5308 | 0.5308 |
-| moead_linear  | 27    | 0.0026 | 0.0247 | 0.0247   | 0.5098 | 0.5098 |
-| moead_mod_cheby | 27    | 0.0004 | 0.0119 | 0.0119   | 0.5296 | 0.5296 |
-| moead_mod_linear | 27    | 0.0008 | 0.0110 | 0.0110   | 0.5293 | 0.5293 |
-| nsga2         | 27    | 0.0003 | 0.0094 | 0.0094   | 0.5320 | 0.5320 |
-| moead_cheby   | 28    | 0.0010 | 0.0091 | 0.0091   | 0.5317 | 0.5317 |
-| moead_linear  | 28    | 0.0008 | 0.0114 | 0.0114   | 0.5283 | 0.5283 |
-| moead_mod_cheby | 28    | 0.0004 | 0.0113 | 0.0113   | 0.5307 | 0.5307 |
-| moead_mod_linear | 28    | 0.0012 | 0.0130 | 0.0130   | 0.5258 | 0.5258 |
-| nsga2         | 28    | 0.0003 | 0.0092 | 0.0092   | 0.5321 | 0.5321 |
-| moead_cheby   | 29    | 0.0112 | 0.0091 | 0.0112   | 1.0189 | 0.5324 |
-| moead_linear  | 29    | 0.0006 | 0.0109 | 0.0109   | 0.5299 | 0.5299 |
-| moead_mod_cheby | 29    | 0.0004 | 0.0103 | 0.0103   | 0.5313 | 0.5313 |
-| moead_mod_linear | 29    | 0.0033 | 0.0127 | 0.0127   | 0.5249 | 0.5249 |
-| nsga2         | 29    | 0.0004 | 0.0100 | 0.0100   | 0.5316 | 0.5316 |
-| moead_cheby   | 30    | 0.0005 | 0.0086 | 0.0086   | 0.5325 | 0.5325 |
-| moead_linear  | 30    | 0.0007 | 0.0093 | 0.0093   | 0.5326 | 0.5326 |
-| moead_mod_cheby | 30    | 0.0004 | 0.0105 | 0.0105   | 0.5316 | 0.5316 |
-| moead_mod_linear | 30    | 0.0012 | 0.0100 | 0.0100   | 0.5301 | 0.5301 |
-| nsga2         | 30    | 0.0009 | 0.0099 | 0.0099   | 0.5308 | 0.5308 |
+| Algorithm          | Run    | GD     | IGD      | $\Delta$   | HV Platemo | HV Rect | HV HSO |
+|--------------------|--------|--------|----------|------------|------------|---------|--------|
+| moead_linear  | 1     | 0.0005 | 0.0025 | 0.0025   | 0.5402 | 0.5402 | 0.5402 |
+| moead_cheby   | 1     | 0.0004 | 0.0024 | 0.0024   | 0.5404 | 0.5404 | 0.5404 |
+| moead_mod_linear | 1     | 0.0006 | 0.0125 | 0.0125   | 0.5257 | 0.5257 | 0.5257 |
+| moead_mod_cheby | 1     | 0.0004 | 0.0027 | 0.0027   | 0.5403 | 0.5403 | 0.5403 |
+| nsga2         | 1     | 0.0004 | 0.0027 | 0.0027   | 0.5402 | 0.5402 | 0.5402 |
+| moead_linear  | 2     | 0.0005 | 0.0028 | 0.0028   | 0.5397 | 0.5397 | 0.5397 |
+| moead_cheby   | 2     | 0.0004 | 0.0023 | 0.0023   | 0.5406 | 0.5406 | 0.5406 |
+| moead_mod_linear | 2     | 0.0006 | 0.0032 | 0.0032   | 0.5391 | 0.5391 | 0.5391 |
+| moead_mod_cheby | 2     | 0.0004 | 0.0027 | 0.0027   | 0.5403 | 0.5403 | 0.5403 |
+| nsga2         | 2     | 0.0004 | 0.0024 | 0.0024   | 0.5404 | 0.5404 | 0.5404 |
+| moead_linear  | 3     | 0.0006 | 0.0115 | 0.0115   | 0.5285 | 0.5285 | 0.5285 |
+| moead_cheby   | 3     | 0.0004 | 0.0024 | 0.0024   | 0.5405 | 0.5405 | 0.5405 |
+| moead_mod_linear | 3     | 0.0006 | 0.0187 | 0.0187   | 0.5174 | 0.5174 | 0.5174 |
+| moead_mod_cheby | 3     | 0.0004 | 0.0026 | 0.0026   | 0.5404 | 0.5404 | 0.5404 |
+| nsga2         | 3     | 0.0004 | 0.0025 | 0.0025   | 0.5405 | 0.5405 | 0.5405 |
+| moead_linear  | 4     | 0.0004 | 0.0033 | 0.0033   | 0.5393 | 0.5393 | 0.5393 |
+| moead_cheby   | 4     | 0.0004 | 0.0024 | 0.0024   | 0.5406 | 0.5406 | 0.5406 |
+| moead_mod_linear | 4     | 0.0008 | 0.0071 | 0.0071   | 0.5342 | 0.5342 | 0.5342 |
+| moead_mod_cheby | 4     | 0.0004 | 0.0025 | 0.0025   | 0.5403 | 0.5403 | 0.5403 |
+| nsga2         | 4     | 0.0004 | 0.0024 | 0.0024   | 0.5404 | 0.5404 | 0.5404 |
+| moead_linear  | 5     | 0.0005 | 0.0041 | 0.0041   | 0.5378 | 0.5378 | 0.5378 |
+| moead_cheby   | 5     | 0.0004 | 0.0023 | 0.0023   | 0.5406 | 0.5406 | 0.5406 |
+| moead_mod_linear | 5     | 0.0006 | 0.0028 | 0.0028   | 0.5397 | 0.5397 | 0.5397 |
+| moead_mod_cheby | 5     | 0.0004 | 0.0026 | 0.0026   | 0.5403 | 0.5403 | 0.5403 |
+| nsga2         | 5     | 0.0004 | 0.0024 | 0.0024   | 0.5403 | 0.5403 | 0.5403 |
+| moead_linear  | 6     | 0.0004 | 0.0092 | 0.0092   | 0.5313 | 0.5313 | 0.5313 |
+| moead_cheby   | 6     | 0.0028 | 0.0023 | 0.0028   | 0.7992 | 0.5406 | 0.5406 |
+| moead_mod_linear | 6     | 0.0008 | 0.0185 | 0.0185   | 0.5132 | 0.5132 | 0.5132 |
+| moead_mod_cheby | 6     | 0.0004 | 0.0024 | 0.0024   | 0.5404 | 0.5404 | 0.5404 |
+| nsga2         | 6     | 0.0004 | 0.0024 | 0.0024   | 0.5405 | 0.5405 | 0.5405 |
+| moead_linear  | 7     | 0.0005 | 0.0092 | 0.0092   | 0.5309 | 0.5309 | 0.5309 |
+| moead_cheby   | 7     | 0.0004 | 0.0025 | 0.0025   | 0.5404 | 0.5404 | 0.5404 |
+| moead_mod_linear | 7     | 0.0009 | 0.0080 | 0.0080   | 0.5317 | 0.5317 | 0.5317 |
+| moead_mod_cheby | 7     | 0.0004 | 0.0028 | 0.0028   | 0.5403 | 0.5403 | 0.5403 |
+| nsga2         | 7     | 0.0004 | 0.0024 | 0.0024   | 0.5404 | 0.5404 | 0.5404 |
+| moead_linear  | 8     | 0.0005 | 0.0032 | 0.0032   | 0.5393 | 0.5393 | 0.5393 |
+| moead_cheby   | 8     | 0.0017 | 0.0023 | 0.0023   | 0.7221 | 0.5405 | 0.5405 |
+| moead_mod_linear | 8     | 0.0004 | 0.0503 | 0.0503   | 0.4785 | 0.4785 | 0.4785 |
+| moead_mod_cheby | 8     | 0.0004 | 0.0025 | 0.0025   | 0.5404 | 0.5404 | 0.5404 |
+| nsga2         | 8     | 0.0004 | 0.0024 | 0.0024   | 0.5404 | 0.5404 | 0.5404 |
+| moead_linear  | 9     | 0.0004 | 0.0033 | 0.0033   | 0.5398 | 0.5398 | 0.5398 |
+| moead_cheby   | 9     | 0.0014 | 0.0023 | 0.0023   | 0.6456 | 0.5406 | 0.5406 |
+| moead_mod_linear | 9     | 0.0004 | 0.0027 | 0.0027   | 0.5400 | 0.5400 | 0.5400 |
+| moead_mod_cheby | 9     | 0.0004 | 0.0025 | 0.0025   | 0.5405 | 0.5405 | 0.5405 |
+| nsga2         | 9     | 0.0004 | 0.0023 | 0.0023   | 0.5406 | 0.5406 | 0.5406 |
+| moead_linear  | 10    | 0.0005 | 0.0027 | 0.0027   | 0.5399 | 0.5399 | 0.5399 |
+| moead_cheby   | 10    | 0.0004 | 0.0024 | 0.0024   | 0.5406 | 0.5406 | 0.5406 |
+| moead_mod_linear | 10    | 0.0011 | 0.0082 | 0.0082   | 0.5307 | 0.5307 | 0.5307 |
+| moead_mod_cheby | 10    | 0.0004 | 0.0026 | 0.0026   | 0.5403 | 0.5403 | 0.5403 |
+| nsga2         | 10    | 0.0004 | 0.0023 | 0.0023   | 0.5405 | 0.5405 | 0.5405 |
+| moead_linear  | 11    | 0.0005 | 0.0033 | 0.0033   | 0.5393 | 0.5393 | 0.5393 |
+| moead_cheby   | 11    | 0.0004 | 0.0024 | 0.0024   | 0.5403 | 0.5403 | 0.5403 |
+| moead_mod_linear | 11    | 0.0004 | 0.0221 | 0.0221   | 0.5140 | 0.5140 | 0.5140 |
+| moead_mod_cheby | 11    | 0.0004 | 0.0026 | 0.0026   | 0.5403 | 0.5403 | 0.5403 |
+| nsga2         | 11    | 0.0004 | 0.0023 | 0.0023   | 0.5405 | 0.5405 | 0.5405 |
+| moead_linear  | 12    | 0.0005 | 0.0042 | 0.0042   | 0.5380 | 0.5380 | 0.5380 |
+| moead_cheby   | 12    | 0.0017 | 0.0024 | 0.0024   | 0.5739 | 0.5405 | 0.5405 |
+| moead_mod_linear | 12    | 0.0008 | 0.0048 | 0.0048   | 0.5367 | 0.5367 | 0.5367 |
+| moead_mod_cheby | 12    | 0.0004 | 0.0028 | 0.0028   | 0.5402 | 0.5402 | 0.5402 |
+| nsga2         | 12    | 0.0004 | 0.0024 | 0.0024   | 0.5404 | 0.5404 | 0.5404 |
+| moead_linear  | 13    | 0.0005 | 0.0029 | 0.0029   | 0.5396 | 0.5396 | 0.5396 |
+| moead_cheby   | 13    | 0.0035 | 0.0023 | 0.0035   | 1.1186 | 0.5404 | 0.5404 |
+| moead_mod_linear | 13    | 0.0012 | 0.0048 | 0.0048   | 0.5367 | 0.5367 | 0.5367 |
+| moead_mod_cheby | 13    | 0.0039 | 0.0028 | 0.0039   | 0.8890 | 0.5400 | 0.5400 |
+| nsga2         | 13    | 0.0004 | 0.0024 | 0.0024   | 0.5405 | 0.5405 | 0.5405 |
+| moead_linear  | 14    | 0.0004 | 0.0027 | 0.0027   | 0.5401 | 0.5401 | 0.5401 |
+| moead_cheby   | 14    | 0.0004 | 0.0023 | 0.0023   | 0.5406 | 0.5406 | 0.5406 |
+| moead_mod_linear | 14    | 0.0007 | 0.0034 | 0.0034   | 0.5385 | 0.5385 | 0.5385 |
+| moead_mod_cheby | 14    | 0.0004 | 0.0027 | 0.0027   | 0.5403 | 0.5403 | 0.5403 |
+| nsga2         | 14    | 0.0004 | 0.0023 | 0.0023   | 0.5405 | 0.5405 | 0.5405 |
+| moead_linear  | 15    | 0.0004 | 0.0034 | 0.0034   | 0.5391 | 0.5391 | 0.5391 |
+| moead_cheby   | 15    | 0.0004 | 0.0023 | 0.0023   | 0.5405 | 0.5405 | 0.5405 |
+| moead_mod_linear | 15    | 0.0008 | 0.0242 | 0.0242   | 0.5059 | 0.5059 | 0.5059 |
+| moead_mod_cheby | 15    | 0.0004 | 0.0027 | 0.0027   | 0.5400 | 0.5400 | 0.5400 |
+| nsga2         | 15    | 0.0004 | 0.0024 | 0.0024   | 0.5405 | 0.5405 | 0.5405 |
+| moead_linear  | 16    | 0.0008 | 0.0093 | 0.0093   | 0.5290 | 0.5290 | 0.5290 |
+| moead_cheby   | 16    | 0.0024 | 0.0022 | 0.0024   | 0.8707 | 0.5406 | 0.5406 |
+| moead_mod_linear | 16    | 0.0014 | 0.0295 | 0.0295   | 0.5014 | 0.5014 | 0.5014 |
+| moead_mod_cheby | 16    | 0.0004 | 0.0027 | 0.0027   | 0.5401 | 0.5401 | 0.5401 |
+| nsga2         | 16    | 0.0004 | 0.0023 | 0.0023   | 0.5405 | 0.5405 | 0.5405 |
+| moead_linear  | 17    | 0.0004 | 0.0045 | 0.0045   | 0.5373 | 0.5373 | 0.5373 |
+| moead_cheby   | 17    | 0.0009 | 0.0023 | 0.0023   | 0.5405 | 0.5405 | 0.5405 |
+| moead_mod_linear | 17    | 0.0006 | 0.0148 | 0.0148   | 0.5222 | 0.5222 | 0.5222 |
+| moead_mod_cheby | 17    | 0.0004 | 0.0026 | 0.0026   | 0.5403 | 0.5403 | 0.5403 |
+| nsga2         | 17    | 0.0004 | 0.0024 | 0.0024   | 0.5405 | 0.5405 | 0.5405 |
+| moead_linear  | 18    | 0.0004 | 0.0108 | 0.0108   | 0.5295 | 0.5295 | 0.5295 |
+| moead_cheby   | 18    | 0.0032 | 0.0023 | 0.0032   | 1.0405 | 0.5405 | 0.5405 |
+| moead_mod_linear | 18    | 0.0004 | 0.0042 | 0.0042   | 0.5379 | 0.5379 | 0.5379 |
+| moead_mod_cheby | 18    | 0.0004 | 0.0024 | 0.0024   | 0.5405 | 0.5405 | 0.5405 |
+| nsga2         | 18    | 0.0004 | 0.0024 | 0.0024   | 0.5404 | 0.5404 | 0.5404 |
+| moead_linear  | 19    | 0.0005 | 0.0034 | 0.0034   | 0.5393 | 0.5393 | 0.5393 |
+| moead_cheby   | 19    | 0.0018 | 0.0025 | 0.0025   | 0.7445 | 0.5403 | 0.5403 |
+| moead_mod_linear | 19    | 0.0013 | 0.0105 | 0.0105   | 0.5292 | 0.5292 | 0.5292 |
+| moead_mod_cheby | 19    | 0.0004 | 0.0024 | 0.0024   | 0.5405 | 0.5405 | 0.5405 |
+| nsga2         | 19    | 0.0004 | 0.0026 | 0.0026   | 0.5403 | 0.5403 | 0.5403 |
+| moead_linear  | 20    | 0.0004 | 0.0167 | 0.0167   | 0.5212 | 0.5212 | 0.5212 |
+| moead_cheby   | 20    | 0.0059 | 0.0024 | 0.0059   | 1.3617 | 0.5405 | 0.5405 |
+| moead_mod_linear | 20    | 0.0004 | 0.0251 | 0.0251   | 0.5103 | 0.5103 | 0.5103 |
+| moead_mod_cheby | 20    | 0.0004 | 0.0026 | 0.0026   | 0.5403 | 0.5403 | 0.5403 |
+| nsga2         | 20    | 0.0004 | 0.0023 | 0.0023   | 0.5406 | 0.5406 | 0.5406 |
+| moead_linear  | 21    | 0.0007 | 0.0066 | 0.0066   | 0.5343 | 0.5343 | 0.5343 |
+| moead_cheby   | 21    | 0.0004 | 0.0023 | 0.0023   | 0.5406 | 0.5406 | 0.5406 |
+| moead_mod_linear | 21    | 0.0011 | 0.0052 | 0.0052   | 0.5360 | 0.5360 | 0.5360 |
+| moead_mod_cheby | 21    | 0.0004 | 0.0026 | 0.0026   | 0.5403 | 0.5403 | 0.5403 |
+| nsga2         | 21    | 0.0004 | 0.0024 | 0.0024   | 0.5405 | 0.5405 | 0.5405 |
+| moead_linear  | 22    | 0.0004 | 0.0042 | 0.0042   | 0.5379 | 0.5379 | 0.5379 |
+| moead_cheby   | 22    | 0.0074 | 0.0023 | 0.0074   | 1.3972 | 0.5404 | 0.5404 |
+| moead_mod_linear | 22    | 0.0004 | 0.0462 | 0.0462   | 0.4848 | 0.4848 | 0.4848 |
+| moead_mod_cheby | 22    | 0.0004 | 0.0025 | 0.0025   | 0.5403 | 0.5403 | 0.5403 |
+| nsga2         | 22    | 0.0004 | 0.0024 | 0.0024   | 0.5405 | 0.5405 | 0.5405 |
+| moead_linear  | 23    | 0.0004 | 0.0036 | 0.0036   | 0.5386 | 0.5386 | 0.5386 |
+| moead_cheby   | 23    | 0.0004 | 0.0023 | 0.0023   | 0.5405 | 0.5405 | 0.5405 |
+| moead_mod_linear | 23    | 0.0010 | 0.0315 | 0.0315   | 0.4958 | 0.4958 | 0.4958 |
+| moead_mod_cheby | 23    | 0.0004 | 0.0026 | 0.0026   | 0.5403 | 0.5403 | 0.5403 |
+| nsga2         | 23    | 0.0004 | 0.0023 | 0.0023   | 0.5406 | 0.5406 | 0.5406 |
+| moead_linear  | 24    | 0.0008 | 0.0081 | 0.0081   | 0.5315 | 0.5315 | 0.5315 |
+| moead_cheby   | 24    | 0.0044 | 0.0025 | 0.0044   | 0.9481 | 0.5404 | 0.5404 |
+| moead_mod_linear | 24    | 0.0005 | 0.0140 | 0.0140   | 0.5254 | 0.5254 | 0.5254 |
+| moead_mod_cheby | 24    | 0.0004 | 0.0027 | 0.0027   | 0.5402 | 0.5402 | 0.5402 |
+| nsga2         | 24    | 0.0004 | 0.0023 | 0.0023   | 0.5404 | 0.5404 | 0.5404 |
+| moead_linear  | 25    | 0.0006 | 0.0033 | 0.0033   | 0.5390 | 0.5390 | 0.5390 |
+| moead_cheby   | 25    | 0.0004 | 0.0024 | 0.0024   | 0.5405 | 0.5405 | 0.5405 |
+| moead_mod_linear | 25    | 0.0009 | 0.0263 | 0.0263   | 0.5029 | 0.5029 | 0.5029 |
+| moead_mod_cheby | 25    | 0.0004 | 0.0027 | 0.0027   | 0.5402 | 0.5402 | 0.5402 |
+| nsga2         | 25    | 0.0004 | 0.0025 | 0.0025   | 0.5402 | 0.5402 | 0.5402 |
+| moead_linear  | 26    | 0.0008 | 0.0061 | 0.0061   | 0.5347 | 0.5347 | 0.5347 |
+| moead_cheby   | 26    | 0.0004 | 0.0024 | 0.0024   | 0.5405 | 0.5405 | 0.5405 |
+| moead_mod_linear | 26    | 0.0008 | 0.0102 | 0.0102   | 0.5285 | 0.5285 | 0.5285 |
+| moead_mod_cheby | 26    | 0.0004 | 0.0026 | 0.0026   | 0.5403 | 0.5403 | 0.5403 |
+| nsga2         | 26    | 0.0004 | 0.0024 | 0.0024   | 0.5405 | 0.5405 | 0.5405 |
+| moead_linear  | 27    | 0.0005 | 0.0034 | 0.0034   | 0.5397 | 0.5397 | 0.5397 |
+| moead_cheby   | 27    | 0.0004 | 0.0024 | 0.0024   | 0.5406 | 0.5406 | 0.5406 |
+| moead_mod_linear | 27    | 0.0005 | 0.0260 | 0.0260   | 0.5048 | 0.5048 | 0.5048 |
+| moead_mod_cheby | 27    | 0.0004 | 0.0028 | 0.0028   | 0.5400 | 0.5400 | 0.5400 |
+| nsga2         | 27    | 0.0004 | 0.0023 | 0.0023   | 0.5405 | 0.5405 | 0.5405 |
+| moead_linear  | 28    | 0.0004 | 0.0130 | 0.0130   | 0.5264 | 0.5264 | 0.5264 |
+| moead_cheby   | 28    | 0.0046 | 0.0023 | 0.0046   | 1.3641 | 0.5405 | 0.5405 |
+| moead_mod_linear | 28    | 0.0006 | 0.0170 | 0.0170   | 0.5204 | 0.5204 | 0.5204 |
+| moead_mod_cheby | 28    | 0.0004 | 0.0026 | 0.0026   | 0.5404 | 0.5404 | 0.5404 |
+| nsga2         | 28    | 0.0004 | 0.0024 | 0.0024   | 0.5405 | 0.5405 | 0.5405 |
+| moead_linear  | 29    | 0.0004 | 0.0153 | 0.0153   | 0.5221 | 0.5221 | 0.5221 |
+| moead_cheby   | 29    | 0.0004 | 0.0023 | 0.0023   | 0.5406 | 0.5406 | 0.5406 |
+| moead_mod_linear | 29    | 0.0013 | 0.0111 | 0.0111   | 0.5263 | 0.5263 | 0.5263 |
+| moead_mod_cheby | 29    | 0.0004 | 0.0026 | 0.0026   | 0.5402 | 0.5402 | 0.5402 |
+| nsga2         | 29    | 0.0004 | 0.0024 | 0.0024   | 0.5405 | 0.5405 | 0.5405 |
+| moead_linear  | 30    | 0.0005 | 0.0034 | 0.0034   | 0.5388 | 0.5388 | 0.5388 |
+| moead_cheby   | 30    | 0.0004 | 0.0023 | 0.0023   | 0.5405 | 0.5405 | 0.5405 |
+| moead_mod_linear | 30    | 0.0004 | 0.0213 | 0.0213   | 0.5151 | 0.5151 | 0.5151 |
+| moead_mod_cheby | 30    | 0.0004 | 0.0025 | 0.0025   | 0.5404 | 0.5404 | 0.5404 |
+| nsga2         | 30    | 0.0004 | 0.0024 | 0.0024   | 0.5405 | 0.5405 | 0.5405 |
 
 **ZDT3 Results:**
 
-| Algorithm          | Run    | GD     | IGD      | $\Delta$   | HV Platemo | HV Rect |
-|--------------------|--------|--------|----------|------------|------------|---------|
-| moead_cheby   | 1     | 0.0025 | 0.1929 | 0.1929   | 1.3255 | 1.3255 |
-| moead_linear  | 1     | 0.0290 | 0.1940 | 0.1940   | 2.2038 | 1.3254 |
-| moead_mod_cheby | 1     | 0.0021 | 0.1936 | 0.1936   | 1.3251 | 1.3251 |
-| moead_mod_linear | 1     | 0.0021 | 0.1944 | 0.1944   | 1.3255 | 1.3255 |
-| nsga2         | 1     | 0.0021 | 0.1934 | 0.1934   | 1.3256 | 1.3256 |
-| moead_cheby   | 2     | 0.0079 | 0.1935 | 0.1935   | 1.4605 | 1.3254 |
-| moead_linear  | 2     | 0.0349 | 0.1941 | 0.1941   | 1.7703 | 1.3251 |
-| moead_mod_cheby | 2     | 0.0019 | 0.1933 | 0.1933   | 1.3258 | 1.3258 |
-| moead_mod_linear | 2     | 0.0023 | 0.1958 | 0.1958   | 1.3243 | 1.3243 |
-| nsga2         | 2     | 0.0023 | 0.1935 | 0.1935   | 1.3251 | 1.3251 |
-| moead_cheby   | 3     | 0.0023 | 0.1933 | 0.1933   | 1.3256 | 1.3256 |
-| moead_linear  | 3     | 0.0020 | 0.1935 | 0.1935   | 1.3252 | 1.3252 |
-| moead_mod_cheby | 3     | 0.0020 | 0.1937 | 0.1937   | 1.3251 | 1.3251 |
-| moead_mod_linear | 3     | 0.0022 | 0.1948 | 0.1948   | 1.2700 | 1.2700 |
-| nsga2         | 3     | 0.0017 | 0.1937 | 0.1937   | 1.3246 | 1.3246 |
-| moead_cheby   | 4     | 0.0026 | 0.1929 | 0.1929   | 1.3252 | 1.3252 |
-| moead_linear  | 4     | 0.0017 | 0.1938 | 0.1938   | 1.3261 | 1.3261 |
-| moead_mod_cheby | 4     | 0.0027 | 0.1933 | 0.1933   | 1.3256 | 1.3256 |
-| moead_mod_linear | 4     | 0.0027 | 0.1927 | 0.1927   | 1.3221 | 1.3221 |
-| nsga2         | 4     | 0.0018 | 0.1936 | 0.1936   | 1.3250 | 1.3250 |
-| moead_cheby   | 5     | 0.0025 | 0.1933 | 0.1933   | 1.3252 | 1.3252 |
-| moead_linear  | 5     | 0.0386 | 0.1936 | 0.1936   | 2.3171 | 1.3254 |
-| moead_mod_cheby | 5     | 0.0021 | 0.1939 | 0.1939   | 1.3249 | 1.3249 |
-| moead_mod_linear | 5     | 0.0020 | 0.1928 | 0.1928   | 1.3198 | 1.3198 |
-| nsga2         | 5     | 0.0020 | 0.1935 | 0.1935   | 1.3250 | 1.3250 |
-| moead_cheby   | 6     | 0.0292 | 0.1935 | 0.1935   | 1.8343 | 1.3249 |
-| moead_linear  | 6     | 0.0020 | 0.1937 | 0.1937   | 1.3257 | 1.3257 |
-| moead_mod_cheby | 6     | 0.0021 | 0.1941 | 0.1941   | 1.3239 | 1.3239 |
-| moead_mod_linear | 6     | 0.0019 | 0.1963 | 0.1963   | 1.3252 | 1.3252 |
-| nsga2         | 6     | 0.0023 | 0.1933 | 0.1933   | 1.3256 | 1.3256 |
-| moead_cheby   | 7     | 0.0026 | 0.1934 | 0.1934   | 1.3251 | 1.3251 |
-| moead_linear  | 7     | 0.0021 | 0.1934 | 0.1934   | 1.3256 | 1.3256 |
-| moead_mod_cheby | 7     | 0.0020 | 0.1938 | 0.1938   | 1.3243 | 1.3243 |
-| moead_mod_linear | 7     | 0.0021 | 0.1952 | 0.1952   | 1.3251 | 1.3251 |
-| nsga2         | 7     | 0.0021 | 0.1933 | 0.1933   | 1.3251 | 1.3251 |
-| moead_cheby   | 8     | 0.0030 | 0.1933 | 0.1933   | 1.3252 | 1.3252 |
-| moead_linear  | 8     | 0.0061 | 0.1936 | 0.1936   | 1.4399 | 1.3255 |
-| moead_mod_cheby | 8     | 0.0021 | 0.1935 | 0.1935   | 1.3253 | 1.3253 |
-| moead_mod_linear | 8     | 0.0018 | 0.2022 | 0.2022   | 1.3251 | 1.3251 |
-| nsga2         | 8     | 0.0019 | 0.1934 | 0.1934   | 1.3251 | 1.3251 |
-| moead_cheby   | 9     | 0.0039 | 0.1933 | 0.1933   | 1.3372 | 1.3258 |
-| moead_linear  | 9     | 0.0024 | 0.1942 | 0.1942   | 1.3257 | 1.3257 |
-| moead_mod_cheby | 9     | 0.0025 | 0.1945 | 0.1945   | 1.3228 | 1.3228 |
-| moead_mod_linear | 9     | 0.0021 | 0.1968 | 0.1968   | 1.3260 | 1.3260 |
-| nsga2         | 9     | 0.0025 | 0.1937 | 0.1937   | 1.3251 | 1.3251 |
-| moead_cheby   | 10    | 0.0021 | 0.1934 | 0.1934   | 1.3249 | 1.3249 |
-| moead_linear  | 10    | 0.0025 | 0.1942 | 0.1942   | 1.3256 | 1.3256 |
-| moead_mod_cheby | 10    | 0.0017 | 0.1934 | 0.1934   | 1.3255 | 1.3255 |
-| moead_mod_linear | 10    | 0.0023 | 0.1936 | 0.1936   | 1.3253 | 1.3253 |
-| nsga2         | 10    | 0.0020 | 0.1935 | 0.1935   | 1.3250 | 1.3250 |
-| moead_cheby   | 11    | 0.0033 | 0.1932 | 0.1932   | 1.3254 | 1.3254 |
-| moead_linear  | 11    | 0.0027 | 0.1956 | 0.1956   | 1.3245 | 1.3245 |
-| moead_mod_cheby | 11    | 0.0122 | 0.1940 | 0.1940   | 1.4833 | 1.3237 |
-| moead_mod_linear | 11    | 0.0022 | 0.2013 | 0.2013   | 1.3228 | 1.3228 |
-| nsga2         | 11    | 0.0020 | 0.1937 | 0.1937   | 1.3244 | 1.3244 |
-| moead_cheby   | 12    | 0.0025 | 0.1934 | 0.1934   | 1.3251 | 1.3251 |
-| moead_linear  | 12    | 0.0028 | 0.1950 | 0.1950   | 1.3260 | 1.3260 |
-| moead_mod_cheby | 12    | 0.0020 | 0.1935 | 0.1935   | 1.3251 | 1.3251 |
-| moead_mod_linear | 12    | 0.0025 | 0.1988 | 0.1988   | 1.3247 | 1.3247 |
-| nsga2         | 12    | 0.0022 | 0.1934 | 0.1934   | 1.3253 | 1.3253 |
-| moead_cheby   | 13    | 0.0024 | 0.1924 | 0.1924   | 1.3256 | 1.3256 |
-| moead_linear  | 13    | 0.0027 | 0.1954 | 0.1954   | 1.3258 | 1.3258 |
-| moead_mod_cheby | 13    | 0.0021 | 0.1935 | 0.1935   | 1.3258 | 1.3258 |
-| moead_mod_linear | 13    | 0.0018 | 0.2014 | 0.2014   | 1.2888 | 1.2888 |
-| nsga2         | 13    | 0.0023 | 0.1934 | 0.1934   | 1.3252 | 1.3252 |
-| moead_cheby   | 14    | 0.0146 | 0.1934 | 0.1934   | 1.5671 | 1.3256 |
-| moead_linear  | 14    | 0.0106 | 0.1938 | 0.1938   | 1.6672 | 1.3255 |
-| moead_mod_cheby | 14    | 0.0432 | 0.1937 | 0.1937   | 1.9722 | 1.3251 |
-| moead_mod_linear | 14    | 0.0024 | 0.1940 | 0.1940   | 1.3251 | 1.3251 |
-| nsga2         | 14    | 0.0019 | 0.1934 | 0.1934   | 1.3250 | 1.3250 |
-| moead_cheby   | 15    | 0.0113 | 0.1928 | 0.1928   | 1.7151 | 1.3254 |
-| moead_linear  | 15    | 0.0034 | 0.1930 | 0.1930   | 1.3255 | 1.3255 |
-| moead_mod_cheby | 15    | 0.0032 | 0.1940 | 0.1940   | 1.3243 | 1.3243 |
-| moead_mod_linear | 15    | 0.0020 | 0.1966 | 0.1966   | 1.3246 | 1.3246 |
-| nsga2         | 15    | 0.0016 | 0.1934 | 0.1934   | 1.3254 | 1.3254 |
-| moead_cheby   | 16    | 0.0076 | 0.1933 | 0.1933   | 1.4952 | 1.3255 |
-| moead_linear  | 16    | 0.0026 | 0.1933 | 0.1933   | 1.3258 | 1.3258 |
-| moead_mod_cheby | 16    | 0.0020 | 0.1936 | 0.1936   | 1.3252 | 1.3252 |
-| moead_mod_linear | 16    | 0.0029 | 0.1917 | 0.1917   | 1.3000 | 1.3000 |
-| nsga2         | 16    | 0.0017 | 0.1933 | 0.1933   | 1.3255 | 1.3255 |
-| moead_cheby   | 17    | 0.0018 | 0.1934 | 0.1934   | 1.3254 | 1.3254 |
-| moead_linear  | 17    | 0.0030 | 0.1933 | 0.1933   | 1.3243 | 1.3243 |
-| moead_mod_cheby | 17    | 0.0062 | 0.1947 | 0.1947   | 1.4458 | 1.3224 |
-| moead_mod_linear | 17    | 0.0023 | 0.2109 | 0.2109   | 1.3167 | 1.3167 |
-| nsga2         | 17    | 0.0023 | 0.1935 | 0.1935   | 1.3250 | 1.3250 |
-| moead_cheby   | 18    | 0.0026 | 0.1933 | 0.1933   | 1.3249 | 1.3249 |
-| moead_linear  | 18    | 0.0020 | 0.1934 | 0.1934   | 1.3252 | 1.3252 |
-| moead_mod_cheby | 18    | 0.0026 | 0.1932 | 0.1932   | 1.3252 | 1.3252 |
-| moead_mod_linear | 18    | 0.0020 | 0.1959 | 0.1959   | 1.3243 | 1.3243 |
-| nsga2         | 18    | 0.0020 | 0.1937 | 0.1937   | 1.3248 | 1.3248 |
-| moead_cheby   | 19    | 0.0026 | 0.1934 | 0.1934   | 1.3254 | 1.3254 |
-| moead_linear  | 19    | 0.0026 | 0.1935 | 0.1935   | 1.3261 | 1.3261 |
-| moead_mod_cheby | 19    | 0.0197 | 0.1936 | 0.1936   | 2.1852 | 1.3252 |
-| moead_mod_linear | 19    | 0.0025 | 0.2131 | 0.2131   | 1.3034 | 1.3034 |
-| nsga2         | 19    | 0.0021 | 0.2105 | 0.2105   | 1.2424 | 1.2424 |
-| moead_cheby   | 20    | 0.0023 | 0.1933 | 0.1933   | 1.3254 | 1.3254 |
-| moead_linear  | 20    | 0.0020 | 0.1939 | 0.1939   | 1.3261 | 1.3261 |
-| moead_mod_cheby | 20    | 0.0035 | 0.1937 | 0.1937   | 1.3248 | 1.3248 |
-| moead_mod_linear | 20    | 0.0021 | 0.1940 | 0.1940   | 1.3256 | 1.3256 |
-| nsga2         | 20    | 0.0019 | 0.1931 | 0.1931   | 1.3257 | 1.3257 |
-| moead_cheby   | 21    | 0.0028 | 0.1932 | 0.1932   | 1.3258 | 1.3258 |
-| moead_linear  | 21    | 0.0021 | 0.1937 | 0.1937   | 1.3262 | 1.3262 |
-| moead_mod_cheby | 21    | 0.0131 | 0.1935 | 0.1935   | 1.8184 | 1.3252 |
-| moead_mod_linear | 21    | 0.0023 | 0.1945 | 0.1945   | 1.3254 | 1.3254 |
-| nsga2         | 21    | 0.0020 | 0.1936 | 0.1936   | 1.3245 | 1.3245 |
-| moead_cheby   | 22    | 0.0025 | 0.1918 | 0.1918   | 1.3254 | 1.3254 |
-| moead_linear  | 22    | 0.0027 | 0.1944 | 0.1944   | 1.3258 | 1.3258 |
-| moead_mod_cheby | 22    | 0.0021 | 0.1934 | 0.1934   | 1.3256 | 1.3256 |
-| moead_mod_linear | 22    | 0.0022 | 0.1944 | 0.1944   | 1.3258 | 1.3258 |
-| nsga2         | 22    | 0.0020 | 0.1933 | 0.1933   | 1.3253 | 1.3253 |
-| moead_cheby   | 23    | 0.0022 | 0.1934 | 0.1934   | 1.3252 | 1.3252 |
-| moead_linear  | 23    | 0.0029 | 0.1947 | 0.1947   | 1.3257 | 1.3257 |
-| moead_mod_cheby | 23    | 0.0022 | 0.1934 | 0.1934   | 1.3257 | 1.3257 |
-| moead_mod_linear | 23    | 0.0028 | 0.1947 | 0.1947   | 1.2926 | 1.2926 |
-| nsga2         | 23    | 0.0018 | 0.2105 | 0.2105   | 1.2422 | 1.2422 |
-| moead_cheby   | 24    | 0.0029 | 0.1933 | 0.1933   | 1.3256 | 1.3256 |
-| moead_linear  | 24    | 0.0036 | 0.1946 | 0.1946   | 1.3250 | 1.3250 |
-| moead_mod_cheby | 24    | 0.0026 | 0.1935 | 0.1935   | 1.3252 | 1.3252 |
-| moead_mod_linear | 24    | 0.0030 | 0.1927 | 0.1927   | 1.2770 | 1.2770 |
-| nsga2         | 24    | 0.0021 | 0.1932 | 0.1932   | 1.3256 | 1.3256 |
-| moead_cheby   | 25    | 0.0023 | 0.1931 | 0.1931   | 1.3258 | 1.3258 |
-| moead_linear  | 25    | 0.0026 | 0.1944 | 0.1944   | 1.3255 | 1.3255 |
-| moead_mod_cheby | 25    | 0.0046 | 0.1938 | 0.1938   | 1.3328 | 1.3254 |
-| moead_mod_linear | 25    | 0.0025 | 0.2045 | 0.2045   | 1.2919 | 1.2919 |
-| nsga2         | 25    | 0.0024 | 0.1934 | 0.1934   | 1.3252 | 1.3252 |
-| moead_cheby   | 26    | 0.0028 | 0.1933 | 0.1933   | 1.3253 | 1.3253 |
-| moead_linear  | 26    | 0.0091 | 0.1971 | 0.1971   | 1.5718 | 1.3248 |
-| moead_mod_cheby | 26    | 0.0017 | 0.1937 | 0.1937   | 1.3252 | 1.3252 |
-| moead_mod_linear | 26    | 0.0021 | 0.1940 | 0.1940   | 1.3092 | 1.3092 |
-| nsga2         | 26    | 0.0020 | 0.1934 | 0.1934   | 1.3252 | 1.3252 |
-| moead_cheby   | 27    | 0.0022 | 0.1933 | 0.1933   | 1.3254 | 1.3254 |
-| moead_linear  | 27    | 0.0021 | 0.1935 | 0.1935   | 1.3258 | 1.3258 |
-| moead_mod_cheby | 27    | 0.0017 | 0.1935 | 0.1935   | 1.3252 | 1.3252 |
-| moead_mod_linear | 27    | 0.0021 | 0.1963 | 0.1963   | 1.3249 | 1.3249 |
-| nsga2         | 27    | 0.0020 | 0.1937 | 0.1937   | 1.3245 | 1.3245 |
-| moead_cheby   | 28    | 0.0027 | 0.1931 | 0.1931   | 1.3259 | 1.3259 |
-| moead_linear  | 28    | 0.0020 | 0.1931 | 0.1931   | 1.3260 | 1.3260 |
-| moead_mod_cheby | 28    | 0.0022 | 0.1935 | 0.1935   | 1.3258 | 1.3258 |
-| moead_mod_linear | 28    | 0.0021 | 0.1941 | 0.1941   | 1.3249 | 1.3249 |
-| nsga2         | 28    | 0.0024 | 0.1935 | 0.1935   | 1.3253 | 1.3253 |
-| moead_cheby   | 29    | 0.0133 | 0.1933 | 0.1933   | 1.8119 | 1.3255 |
-| moead_linear  | 29    | 0.0028 | 0.1938 | 0.1938   | 1.3256 | 1.3256 |
-| moead_mod_cheby | 29    | 0.0023 | 0.1934 | 0.1934   | 1.3251 | 1.3251 |
-| moead_mod_linear | 29    | 0.0027 | 0.1957 | 0.1957   | 1.3056 | 1.3056 |
-| nsga2         | 29    | 0.0021 | 0.1937 | 0.1937   | 1.3246 | 1.3246 |
-| moead_cheby   | 30    | 0.0025 | 0.1933 | 0.1933   | 1.3248 | 1.3248 |
-| moead_linear  | 30    | 0.0021 | 0.1941 | 0.1941   | 1.3261 | 1.3261 |
-| moead_mod_cheby | 30    | 0.0027 | 0.1939 | 0.1939   | 1.3253 | 1.3253 |
-| moead_mod_linear | 30    | 0.0022 | 0.2078 | 0.2078   | 1.3225 | 1.3225 |
-| nsga2         | 30    | 0.0019 | 0.1936 | 0.1936   | 1.3249 | 1.3249 |
+| Algorithm          | Run    | GD     | IGD      | $\Delta$   | HV Platemo | HV Rect | HV HSO |
+|--------------------|--------|--------|----------|------------|------------|---------|--------|
+| moead_linear  | 1     | 0.0033 | 0.1908 | 0.1908   | 1.3977 | 1.3304 | 0.7812 |
+| moead_cheby   | 1     | 0.0025 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| moead_mod_linear | 1     | 0.0024 | 0.1915 | 0.1915   | 1.3304 | 1.3304 | 0.7812 |
+| moead_mod_cheby | 1     | 0.0022 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| nsga2         | 1     | 0.0023 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| moead_linear  | 2     | 0.0024 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| moead_cheby   | 2     | 0.0022 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| moead_mod_linear | 2     | 0.0022 | 0.1911 | 0.1911   | 1.3302 | 1.3302 | 0.7811 |
+| moead_mod_cheby | 2     | 0.0021 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| nsga2         | 2     | 0.0023 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| moead_linear  | 3     | 0.0101 | 0.1907 | 0.1907   | 2.1204 | 1.3305 | 0.7812 |
+| moead_cheby   | 3     | 0.0024 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| moead_mod_linear | 3     | 0.0022 | 0.1921 | 0.1921   | 1.3303 | 1.3303 | 0.7811 |
+| moead_mod_cheby | 3     | 0.0023 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| nsga2         | 3     | 0.0023 | 0.1907 | 0.1907   | 1.3303 | 1.3303 | 0.7811 |
+| moead_linear  | 4     | 0.0040 | 0.1908 | 0.1908   | 1.6243 | 1.3304 | 0.7812 |
+| moead_cheby   | 4     | 0.0025 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| moead_mod_linear | 4     | 0.0023 | 0.1911 | 0.1911   | 1.3303 | 1.3303 | 0.7811 |
+| moead_mod_cheby | 4     | 0.0022 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| nsga2         | 4     | 0.0024 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| moead_linear  | 5     | 0.0022 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| moead_cheby   | 5     | 0.0039 | 0.1908 | 0.1908   | 1.4701 | 1.3304 | 0.7812 |
+| moead_mod_linear | 5     | 0.0022 | 0.1912 | 0.1912   | 1.3303 | 1.3303 | 0.7811 |
+| moead_mod_cheby | 5     | 0.0023 | 0.1908 | 0.1908   | 1.3302 | 1.3302 | 0.7811 |
+| nsga2         | 5     | 0.0021 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| moead_linear  | 6     | 0.0035 | 0.1908 | 0.1908   | 1.4291 | 1.3304 | 0.7812 |
+| moead_cheby   | 6     | 0.0048 | 0.1907 | 0.1907   | 1.5857 | 1.3304 | 0.7812 |
+| moead_mod_linear | 6     | 0.0024 | 0.1916 | 0.1916   | 1.3303 | 1.3303 | 0.7811 |
+| moead_mod_cheby | 6     | 0.0023 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| nsga2         | 6     | 0.0022 | 0.1907 | 0.1907   | 1.3303 | 1.3303 | 0.7811 |
+| moead_linear  | 7     | 0.0025 | 0.1908 | 0.1908   | 1.3304 | 1.3304 | 0.7812 |
+| moead_cheby   | 7     | 0.0023 | 0.1906 | 0.1906   | 1.3305 | 1.3305 | 0.7812 |
+| moead_mod_linear | 7     | 0.0023 | 0.1916 | 0.1916   | 1.3303 | 1.3303 | 0.7811 |
+| moead_mod_cheby | 7     | 0.0022 | 0.1906 | 0.1906   | 1.3304 | 1.3304 | 0.7812 |
+| nsga2         | 7     | 0.0024 | 0.1907 | 0.1907   | 1.3303 | 1.3303 | 0.7811 |
+| moead_linear  | 8     | 0.0065 | 0.1907 | 0.1907   | 2.0727 | 1.3304 | 0.7812 |
+| moead_cheby   | 8     | 0.0037 | 0.1906 | 0.1906   | 1.5085 | 1.3304 | 0.7812 |
+| moead_mod_linear | 8     | 0.0024 | 0.1918 | 0.1918   | 1.3304 | 1.3304 | 0.7812 |
+| moead_mod_cheby | 8     | 0.0021 | 0.1906 | 0.1906   | 1.3304 | 1.3304 | 0.7812 |
+| nsga2         | 8     | 0.0024 | 0.1907 | 0.1907   | 1.3303 | 1.3303 | 0.7811 |
+| moead_linear  | 9     | 0.0023 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| moead_cheby   | 9     | 0.0032 | 0.1906 | 0.1906   | 1.4322 | 1.3304 | 0.7812 |
+| moead_mod_linear | 9     | 0.0022 | 0.1915 | 0.1915   | 1.3303 | 1.3303 | 0.7811 |
+| moead_mod_cheby | 9     | 0.0021 | 0.1908 | 0.1908   | 1.3303 | 1.3303 | 0.7812 |
+| nsga2         | 9     | 0.0022 | 0.1907 | 0.1907   | 1.3303 | 1.3303 | 0.7811 |
+| moead_linear  | 10    | 0.0021 | 0.1906 | 0.1906   | 1.3305 | 1.3305 | 0.7812 |
+| moead_cheby   | 10    | 0.0023 | 0.1907 | 0.1907   | 1.3305 | 1.3305 | 0.7812 |
+| moead_mod_linear | 10    | 0.0021 | 0.1910 | 0.1910   | 1.3303 | 1.3303 | 0.7811 |
+| moead_mod_cheby | 10    | 0.0024 | 0.1908 | 0.1908   | 1.3303 | 1.3303 | 0.7811 |
+| nsga2         | 10    | 0.0024 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| moead_linear  | 11    | 0.0022 | 0.1908 | 0.1908   | 1.3303 | 1.3303 | 0.7811 |
+| moead_cheby   | 11    | 0.0023 | 0.1906 | 0.1906   | 1.3304 | 1.3304 | 0.7812 |
+| moead_mod_linear | 11    | 0.0022 | 0.1917 | 0.1917   | 1.3303 | 1.3303 | 0.7811 |
+| moead_mod_cheby | 11    | 0.0030 | 0.1907 | 0.1907   | 1.3805 | 1.3303 | 0.7811 |
+| nsga2         | 11    | 0.0024 | 0.1908 | 0.1908   | 1.3302 | 1.3302 | 0.7811 |
+| moead_linear  | 12    | 0.0022 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| moead_cheby   | 12    | 0.0036 | 0.1907 | 0.1907   | 1.3594 | 1.3304 | 0.7812 |
+| moead_mod_linear | 12    | 0.0023 | 0.1908 | 0.1908   | 1.3304 | 1.3304 | 0.7812 |
+| moead_mod_cheby | 12    | 0.0022 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| nsga2         | 12    | 0.0024 | 0.1907 | 0.1907   | 1.3303 | 1.3303 | 0.7811 |
+| moead_linear  | 13    | 0.0025 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| moead_cheby   | 13    | 0.0037 | 0.1907 | 0.1907   | 1.5205 | 1.3304 | 0.7812 |
+| moead_mod_linear | 13    | 0.0022 | 0.1916 | 0.1916   | 1.3303 | 1.3303 | 0.7811 |
+| moead_mod_cheby | 13    | 0.0055 | 0.1908 | 0.1908   | 1.6695 | 1.3302 | 0.7811 |
+| nsga2         | 13    | 0.0023 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| moead_linear  | 14    | 0.0022 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| moead_cheby   | 14    | 0.0043 | 0.1906 | 0.1906   | 1.7279 | 1.3305 | 0.7812 |
+| moead_mod_linear | 14    | 0.0022 | 0.1916 | 0.1916   | 1.3304 | 1.3304 | 0.7812 |
+| moead_mod_cheby | 14    | 0.0022 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| nsga2         | 14    | 0.0025 | 0.1907 | 0.1907   | 1.3303 | 1.3303 | 0.7811 |
+| moead_linear  | 15    | 0.0022 | 0.1908 | 0.1908   | 1.3303 | 1.3303 | 0.7811 |
+| moead_cheby   | 15    | 0.0022 | 0.1906 | 0.1906   | 1.3305 | 1.3305 | 0.7812 |
+| moead_mod_linear | 15    | 0.0022 | 0.1919 | 0.1919   | 1.3304 | 1.3304 | 0.7812 |
+| moead_mod_cheby | 15    | 0.0026 | 0.1908 | 0.1908   | 1.3302 | 1.3302 | 0.7810 |
+| nsga2         | 15    | 0.0024 | 0.1908 | 0.1908   | 1.3302 | 1.3302 | 0.7811 |
+| moead_linear  | 16    | 0.0023 | 0.1908 | 0.1908   | 1.3304 | 1.3304 | 0.7812 |
+| moead_cheby   | 16    | 0.0042 | 0.1907 | 0.1907   | 1.6595 | 1.3304 | 0.7812 |
+| moead_mod_linear | 16    | 0.0023 | 0.1952 | 0.1952   | 1.3292 | 1.3292 | 0.7805 |
+| moead_mod_cheby | 16    | 0.0024 | 0.1908 | 0.1908   | 1.3304 | 1.3304 | 0.7812 |
+| nsga2         | 16    | 0.0023 | 0.1907 | 0.1907   | 1.3303 | 1.3303 | 0.7811 |
+| moead_linear  | 17    | 0.0022 | 0.1908 | 0.1908   | 1.3304 | 1.3304 | 0.7812 |
+| moead_cheby   | 17    | 0.0023 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| moead_mod_linear | 17    | 0.0022 | 0.1910 | 0.1910   | 1.3303 | 1.3303 | 0.7811 |
+| moead_mod_cheby | 17    | 0.0022 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| nsga2         | 17    | 0.0023 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| moead_linear  | 18    | 0.0023 | 0.1908 | 0.1908   | 1.3304 | 1.3304 | 0.7812 |
+| moead_cheby   | 18    | 0.0052 | 0.1907 | 0.1907   | 1.8264 | 1.3303 | 0.7811 |
+| moead_mod_linear | 18    | 0.0022 | 0.1914 | 0.1914   | 1.3302 | 1.3302 | 0.7811 |
+| moead_mod_cheby | 18    | 0.0024 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| nsga2         | 18    | 0.0022 | 0.1906 | 0.1906   | 1.3304 | 1.3304 | 0.7812 |
+| moead_linear  | 19    | 0.0022 | 0.1906 | 0.1906   | 1.3304 | 1.3304 | 0.7812 |
+| moead_cheby   | 19    | 0.0037 | 0.1906 | 0.1906   | 1.5346 | 1.3305 | 0.7812 |
+| moead_mod_linear | 19    | 0.0023 | 0.1909 | 0.1909   | 1.3304 | 1.3304 | 0.7812 |
+| moead_mod_cheby | 19    | 0.0022 | 0.1907 | 0.1907   | 1.3303 | 1.3303 | 0.7811 |
+| nsga2         | 19    | 0.0024 | 0.1907 | 0.1907   | 1.3303 | 1.3303 | 0.7811 |
+| moead_linear  | 20    | 0.0085 | 0.1908 | 0.1908   | 2.3130 | 1.3304 | 0.7812 |
+| moead_cheby   | 20    | 0.0064 | 0.1907 | 0.1907   | 2.1475 | 1.3304 | 0.7812 |
+| moead_mod_linear | 20    | 0.0023 | 0.1911 | 0.1911   | 1.3302 | 1.3302 | 0.7811 |
+| moead_mod_cheby | 20    | 0.0022 | 0.1907 | 0.1907   | 1.3303 | 1.3303 | 0.7811 |
+| nsga2         | 20    | 0.0024 | 0.1907 | 0.1907   | 1.3303 | 1.3303 | 0.7811 |
+| moead_linear  | 21    | 0.0070 | 0.1908 | 0.1908   | 1.6513 | 1.3304 | 0.7812 |
+| moead_cheby   | 21    | 0.0024 | 0.1906 | 0.1906   | 1.3304 | 1.3304 | 0.7812 |
+| moead_mod_linear | 21    | 0.0021 | 0.1913 | 0.1913   | 1.3305 | 1.3305 | 0.7812 |
+| moead_mod_cheby | 21    | 0.0022 | 0.1907 | 0.1907   | 1.3303 | 1.3303 | 0.7811 |
+| nsga2         | 21    | 0.0022 | 0.1907 | 0.1907   | 1.3303 | 1.3303 | 0.7811 |
+| moead_linear  | 22    | 0.0025 | 0.1908 | 0.1908   | 1.3304 | 1.3304 | 0.7812 |
+| moead_cheby   | 22    | 0.0067 | 0.1907 | 0.1907   | 2.1860 | 1.3304 | 0.7812 |
+| moead_mod_linear | 22    | 0.0021 | 0.1910 | 0.1910   | 1.3305 | 1.3305 | 0.7812 |
+| moead_mod_cheby | 22    | 0.0023 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| nsga2         | 22    | 0.0023 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| moead_linear  | 23    | 0.0038 | 0.1908 | 0.1908   | 1.5530 | 1.3304 | 0.7812 |
+| moead_cheby   | 23    | 0.0078 | 0.1907 | 0.1907   | 2.4448 | 1.3305 | 0.7812 |
+| moead_mod_linear | 23    | 0.0023 | 0.1920 | 0.1920   | 1.3303 | 1.3303 | 0.7811 |
+| moead_mod_cheby | 23    | 0.0023 | 0.1908 | 0.1908   | 1.3301 | 1.3301 | 0.7810 |
+| nsga2         | 23    | 0.0022 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| moead_linear  | 24    | 0.0024 | 0.1907 | 0.1907   | 1.3305 | 1.3305 | 0.7812 |
+| moead_cheby   | 24    | 0.0063 | 0.1907 | 0.1907   | 1.7368 | 1.3304 | 0.7812 |
+| moead_mod_linear | 24    | 0.0022 | 0.1927 | 0.1927   | 1.3266 | 1.3266 | 0.7790 |
+| moead_mod_cheby | 24    | 0.0022 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| nsga2         | 24    | 0.0023 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| moead_linear  | 25    | 0.0022 | 0.1909 | 0.1909   | 1.3303 | 1.3303 | 0.7811 |
+| moead_cheby   | 25    | 0.0021 | 0.1906 | 0.1906   | 1.3304 | 1.3304 | 0.7812 |
+| moead_mod_linear | 25    | 0.0022 | 0.1916 | 0.1916   | 1.3304 | 1.3304 | 0.7812 |
+| moead_mod_cheby | 25    | 0.0022 | 0.1907 | 0.1907   | 1.3303 | 1.3303 | 0.7811 |
+| nsga2         | 25    | 0.0024 | 0.1907 | 0.1907   | 1.3303 | 1.3303 | 0.7811 |
+| moead_linear  | 26    | 0.0055 | 0.1909 | 0.1909   | 1.7025 | 1.3304 | 0.7812 |
+| moead_cheby   | 26    | 0.0024 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| moead_mod_linear | 26    | 0.0022 | 0.1912 | 0.1912   | 1.3302 | 1.3302 | 0.7811 |
+| moead_mod_cheby | 26    | 0.0023 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| nsga2         | 26    | 0.0025 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| moead_linear  | 27    | 0.0023 | 0.1908 | 0.1908   | 1.3304 | 1.3304 | 0.7812 |
+| moead_cheby   | 27    | 0.0023 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| moead_mod_linear | 27    | 0.0023 | 0.1910 | 0.1910   | 1.3304 | 1.3304 | 0.7812 |
+| moead_mod_cheby | 27    | 0.0023 | 0.1907 | 0.1907   | 1.3303 | 1.3303 | 0.7811 |
+| nsga2         | 27    | 0.0024 | 0.1907 | 0.1907   | 1.3303 | 1.3303 | 0.7811 |
+| moead_linear  | 28    | 0.0023 | 0.1907 | 0.1907   | 1.3305 | 1.3305 | 0.7812 |
+| moead_cheby   | 28    | 0.0022 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| moead_mod_linear | 28    | 0.0024 | 0.1937 | 0.1937   | 1.3302 | 1.3302 | 0.7811 |
+| moead_mod_cheby | 28    | 0.0022 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| nsga2         | 28    | 0.0024 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| moead_linear  | 29    | 0.0023 | 0.1907 | 0.1907   | 1.3305 | 1.3305 | 0.7812 |
+| moead_cheby   | 29    | 0.0023 | 0.1907 | 0.1907   | 1.3305 | 1.3305 | 0.7812 |
+| moead_mod_linear | 29    | 0.0024 | 0.1917 | 0.1917   | 1.3303 | 1.3303 | 0.7811 |
+| moead_mod_cheby | 29    | 0.0022 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| nsga2         | 29    | 0.0024 | 0.1907 | 0.1907   | 1.3303 | 1.3303 | 0.7812 |
+| moead_linear  | 30    | 0.0036 | 0.1907 | 0.1907   | 1.4906 | 1.3305 | 0.7812 |
+| moead_cheby   | 30    | 0.0022 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| moead_mod_linear | 30    | 0.0021 | 0.1924 | 0.1924   | 1.3305 | 1.3305 | 0.7812 |
+| moead_mod_cheby | 30    | 0.0023 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+| nsga2         | 30    | 0.0023 | 0.1907 | 0.1907   | 1.3304 | 1.3304 | 0.7812 |
+
+**DTLZ1 Results:**
+
+| Algorithm          | Run    | GD     | IGD      | $\Delta$   | HV Platemo | HV Rect | HV HSO |
+|--------------------|--------|--------|----------|------------|------------|---------|--------|
+| moead_linear  | 1     | 0.0077 | 0.0184 | 0.0184   | 0.1903 | nan    | 0.1901 |
+| moead_cheby   | 1     | 0.0078 | 0.0185 | 0.0185   | 0.1872 | nan    | 0.1882 |
+| moead_mod_linear | 1     | 0.0079 | 0.0176 | 0.0176   | 0.1907 | nan    | 0.1902 |
+| moead_mod_cheby | 1     | 0.0079 | 0.0187 | 0.0187   | 0.1877 | nan    | 0.1881 |
+| nsga2         | 1     | 0.0076 | 0.0291 | 0.0291   | 0.1860 | nan    | 0.1854 |
+| moead_linear  | 2     | 0.0076 | 0.0182 | 0.0182   | 0.1912 | nan    | 0.1903 |
+| moead_cheby   | 2     | 0.0079 | 0.0187 | 0.0187   | 0.1885 | nan    | 0.1883 |
+| moead_mod_linear | 2     | 0.0078 | 0.0192 | 0.0192   | 0.1899 | nan    | 0.1898 |
+| moead_mod_cheby | 2     | 0.0079 | 0.0205 | 0.0205   | 0.1868 | nan    | 0.1869 |
+| nsga2         | 2     | 0.0079 | 0.0266 | 0.0266   | 0.1862 | nan    | 0.1859 |
+| moead_linear  | 3     | 0.0077 | 0.0179 | 0.0179   | 0.1906 | nan    | 0.1904 |
+| moead_cheby   | 3     | 0.0078 | 0.0188 | 0.0188   | 0.1870 | nan    | 0.1876 |
+| moead_mod_linear | 3     | 0.0077 | 0.0192 | 0.0192   | 0.1895 | nan    | 0.1896 |
+| moead_mod_cheby | 3     | 0.0080 | 0.0187 | 0.0187   | 0.1871 | nan    | 0.1871 |
+| nsga2         | 3     | 0.0076 | 0.0300 | 0.0300   | 0.1834 | nan    | 0.1853 |
+| moead_linear  | 4     | 0.0079 | 0.0199 | 0.0199   | 0.1887 | nan    | 0.1898 |
+| moead_cheby   | 4     | 0.0079 | 0.0180 | 0.0180   | 0.1871 | nan    | 0.1882 |
+| moead_mod_linear | 4     | 0.0077 | 0.0194 | 0.0194   | 0.1911 | nan    | 0.1901 |
+| moead_mod_cheby | 4     | 0.0078 | 0.0193 | 0.0193   | 0.1868 | nan    | 0.1871 |
+| nsga2         | 4     | 0.0081 | 0.0306 | 0.0306   | 0.1857 | nan    | 0.1865 |
+| moead_linear  | 5     | 0.0077 | 0.0182 | 0.0182   | 0.1904 | nan    | 0.1902 |
+| moead_cheby   | 5     | 0.0080 | 0.0188 | 0.0188   | 0.1893 | nan    | 0.1888 |
+| moead_mod_linear | 5     | 0.0075 | 0.0191 | 0.0191   | 0.1895 | nan    | 0.1900 |
+| moead_mod_cheby | 5     | 0.0078 | 0.0190 | 0.0190   | 0.1871 | nan    | 0.1876 |
+| nsga2         | 5     | 0.0076 | 0.0290 | 0.0290   | 0.1857 | nan    | 0.1861 |
+| moead_linear  | 6     | 0.0077 | 0.0180 | 0.0180   | 0.1901 | nan    | 0.1902 |
+| moead_cheby   | 6     | 0.0077 | 0.0176 | 0.0176   | 0.1884 | nan    | 0.1889 |
+| moead_mod_linear | 6     | 0.0075 | 0.0196 | 0.0196   | 0.1906 | nan    | 0.1898 |
+| moead_mod_cheby | 6     | 0.0075 | 0.0191 | 0.0191   | 0.1868 | nan    | 0.1869 |
+| nsga2         | 6     | 0.0077 | 0.0266 | 0.0266   | 0.1863 | nan    | 0.1864 |
+| moead_linear  | 7     | 0.0076 | 0.0188 | 0.0188   | 0.1898 | nan    | 0.1901 |
+| moead_cheby   | 7     | 0.0076 | 0.0180 | 0.0180   | 0.1878 | nan    | 0.1884 |
+| moead_mod_linear | 7     | 0.0076 | 0.0194 | 0.0194   | 0.1881 | nan    | 0.1895 |
+| moead_mod_cheby | 7     | 0.0080 | 0.0198 | 0.0198   | 0.1856 | nan    | 0.1866 |
+| nsga2         | 7     | 0.0080 | 0.0297 | 0.0297   | 0.1863 | nan    | 0.1867 |
+| moead_linear  | 8     | 0.0077 | 0.0183 | 0.0183   | 0.1900 | nan    | 0.1902 |
+| moead_cheby   | 8     | 0.0081 | 0.0193 | 0.0193   | 0.1869 | nan    | 0.1879 |
+| moead_mod_linear | 8     | 0.0077 | 0.0192 | 0.0192   | 0.1896 | nan    | 0.1897 |
+| moead_mod_cheby | 8     | 0.0081 | 0.0189 | 0.0189   | 0.1876 | nan    | 0.1873 |
+| nsga2         | 8     | 0.0080 | 0.0242 | 0.0242   | 0.1861 | nan    | 0.1863 |
+| moead_linear  | 9     | 0.0079 | 0.0191 | 0.0191   | 0.1891 | nan    | 0.1898 |
+| moead_cheby   | 9     | 0.0075 | 0.0184 | 0.0184   | 0.1882 | nan    | 0.1885 |
+| moead_mod_linear | 9     | 0.0072 | 0.0195 | 0.0195   | 0.1911 | nan    | 0.1900 |
+| moead_mod_cheby | 9     | 0.0081 | 0.0194 | 0.0194   | 0.1868 | nan    | 0.1868 |
+| nsga2         | 9     | 0.0083 | 0.0286 | 0.0286   | 0.1845 | nan    | 0.1851 |
+| moead_linear  | 10    | 0.0073 | 0.0182 | 0.0182   | 0.1896 | nan    | 0.1903 |
+| moead_cheby   | 10    | 0.0078 | 0.0189 | 0.0189   | 0.1878 | nan    | 0.1878 |
+| moead_mod_linear | 10    | 0.0078 | 0.0197 | 0.0197   | 0.1893 | nan    | 0.1894 |
+| moead_mod_cheby | 10    | 0.0079 | 0.0200 | 0.0200   | 0.1871 | nan    | 0.1879 |
+| nsga2         | 10    | 0.0081 | 0.0255 | 0.0255   | 0.1869 | nan    | 0.1864 |
+| moead_linear  | 11    | 0.0078 | 0.0177 | 0.0177   | 0.1898 | nan    | 0.1902 |
+| moead_cheby   | 11    | 0.0080 | 0.0196 | 0.0196   | 0.1882 | nan    | 0.1872 |
+| moead_mod_linear | 11    | 0.0073 | 0.0187 | 0.0187   | 0.1905 | nan    | 0.1900 |
+| moead_mod_cheby | 11    | 0.0079 | 0.0201 | 0.0201   | 0.1864 | nan    | 0.1874 |
+| nsga2         | 11    | 0.0080 | 0.0261 | 0.0261   | 0.1850 | nan    | 0.1860 |
+| moead_linear  | 12    | 0.0075 | 0.0181 | 0.0181   | 0.1904 | nan    | 0.1902 |
+| moead_cheby   | 12    | 0.0078 | 0.0186 | 0.0186   | 0.1881 | nan    | 0.1880 |
+| moead_mod_linear | 12    | 0.0075 | 0.0196 | 0.0196   | 0.1901 | nan    | 0.1898 |
+| moead_mod_cheby | 12    | 0.0080 | 0.0185 | 0.0185   | 0.1866 | nan    | 0.1880 |
+| nsga2         | 12    | 0.0079 | 0.0307 | 0.0307   | 0.1845 | nan    | 0.1843 |
+| moead_linear  | 13    | 0.0078 | 0.0198 | 0.0198   | 0.1910 | nan    | 0.1899 |
+| moead_cheby   | 13    | 0.0077 | 0.0180 | 0.0180   | 0.1880 | nan    | 0.1887 |
+| moead_mod_linear | 13    | 0.0077 | 0.0198 | 0.0198   | 0.1896 | nan    | 0.1894 |
+| moead_mod_cheby | 13    | 0.0078 | 0.0189 | 0.0189   | 0.1879 | nan    | 0.1879 |
+| nsga2         | 13    | 0.0078 | 0.0270 | 0.0270   | 0.1866 | nan    | 0.1863 |
+| moead_linear  | 14    | 0.0076 | 0.0185 | 0.0185   | 0.1899 | nan    | 0.1901 |
+| moead_cheby   | 14    | 0.0080 | 0.0178 | 0.0178   | 0.1883 | nan    | 0.1883 |
+| moead_mod_linear | 14    | 0.0077 | 0.0183 | 0.0183   | 0.1913 | nan    | 0.1901 |
+| moead_mod_cheby | 14    | 0.0076 | 0.0194 | 0.0194   | 0.1875 | nan    | 0.1877 |
+| nsga2         | 14    | 0.0074 | 0.0246 | 0.0246   | 0.1871 | nan    | 0.1871 |
+| moead_linear  | 15    | 0.0077 | 0.0187 | 0.0187   | 0.1885 | nan    | 0.1902 |
+| moead_cheby   | 15    | 0.0080 | 0.0184 | 0.0184   | 0.1874 | nan    | 0.1884 |
+| moead_mod_linear | 15    | 0.0077 | 0.0192 | 0.0192   | 0.1900 | nan    | 0.1898 |
+| moead_mod_cheby | 15    | 0.0080 | 0.0193 | 0.0193   | 0.1887 | nan    | 0.1884 |
+| nsga2         | 15    | 0.0076 | 0.0250 | 0.0250   | 0.1865 | nan    | 0.1870 |
+| moead_linear  | 16    | 0.0078 | 0.0171 | 0.0171   | 0.1909 | nan    | 0.1903 |
+| moead_cheby   | 16    | 0.0079 | 0.0194 | 0.0194   | 0.1881 | nan    | 0.1881 |
+| moead_mod_linear | 16    | 0.0074 | 0.0198 | 0.0198   | 0.1884 | nan    | 0.1898 |
+| moead_mod_cheby | 16    | 0.0077 | 0.0183 | 0.0183   | 0.1886 | nan    | 0.1880 |
+| nsga2         | 16    | 0.0076 | 0.0270 | 0.0270   | 0.1855 | nan    | 0.1862 |
+| moead_linear  | 17    | 0.0078 | 0.0192 | 0.0192   | 0.1890 | nan    | 0.1902 |
+| moead_cheby   | 17    | 0.0079 | 0.0181 | 0.0181   | 0.1880 | nan    | 0.1881 |
+| moead_mod_linear | 17    | 0.0076 | 0.0198 | 0.0198   | 0.1904 | nan    | 0.1898 |
+| moead_mod_cheby | 17    | 0.0078 | 0.0193 | 0.0193   | 0.1864 | nan    | 0.1866 |
+| nsga2         | 17    | 0.0077 | 0.0296 | 0.0296   | 0.1854 | nan    | 0.1857 |
+| moead_linear  | 18    | 0.0074 | 0.0172 | 0.0172   | 0.1903 | nan    | 0.1904 |
+| moead_cheby   | 18    | 0.0075 | 0.0182 | 0.0182   | 0.1892 | nan    | 0.1886 |
+| moead_mod_linear | 18    | 0.0077 | 0.0194 | 0.0194   | 0.1903 | nan    | 0.1897 |
+| moead_mod_cheby | 18    | 0.0080 | 0.0198 | 0.0198   | 0.1861 | nan    | 0.1870 |
+| nsga2         | 18    | 0.0076 | 0.0293 | 0.0293   | 0.1845 | nan    | 0.1844 |
+| moead_linear  | 19    | 0.0077 | 0.0184 | 0.0184   | 0.1907 | nan    | 0.1900 |
+| moead_cheby   | 19    | 0.0079 | 0.0185 | 0.0185   | 0.1888 | nan    | 0.1877 |
+| moead_mod_linear | 19    | 0.0073 | 0.0189 | 0.0189   | 0.1900 | nan    | 0.1901 |
+| moead_mod_cheby | 19    | 0.0079 | 0.0190 | 0.0190   | 0.1880 | nan    | 0.1878 |
+| nsga2         | 19    | 0.0079 | 0.0285 | 0.0285   | 0.1843 | nan    | 0.1855 |
+| moead_linear  | 20    | 0.0076 | 0.0188 | 0.0188   | 0.1898 | nan    | 0.1900 |
+| moead_cheby   | 20    | 0.0080 | 0.0186 | 0.0186   | 0.1865 | nan    | 0.1881 |
+| moead_mod_linear | 20    | 0.0077 | 0.0185 | 0.0185   | 0.1899 | nan    | 0.1900 |
+| moead_mod_cheby | 20    | 0.0078 | 0.0186 | 0.0186   | 0.1882 | nan    | 0.1880 |
+| nsga2         | 20    | 0.0076 | 0.0267 | 0.0267   | 0.1852 | nan    | 0.1845 |
+| moead_linear  | 21    | 0.0077 | 0.0193 | 0.0193   | 0.1902 | nan    | 0.1899 |
+| moead_cheby   | 21    | 0.0079 | 0.0183 | 0.0183   | 0.1881 | nan    | 0.1887 |
+| moead_mod_linear | 21    | 0.0076 | 0.0184 | 0.0184   | 0.1913 | nan    | 0.1900 |
+| moead_mod_cheby | 21    | 0.0081 | 0.0185 | 0.0185   | 0.1869 | nan    | 0.1879 |
+| nsga2         | 21    | 0.0079 | 0.0298 | 0.0298   | 0.1860 | nan    | 0.1862 |
+| moead_linear  | 22    | 0.0075 | 0.0184 | 0.0184   | 0.1904 | nan    | 0.1901 |
+| moead_cheby   | 22    | 0.0077 | 0.0186 | 0.0186   | 0.1893 | nan    | 0.1889 |
+| moead_mod_linear | 22    | 0.0077 | 0.0190 | 0.0190   | 0.1895 | nan    | 0.1900 |
+| moead_mod_cheby | 22    | 0.0078 | 0.0190 | 0.0190   | 0.1861 | nan    | 0.1873 |
+| nsga2         | 22    | 0.0081 | 0.0271 | 0.0271   | 0.1865 | nan    | 0.1861 |
+| moead_linear  | 23    | 0.0078 | 0.0180 | 0.0180   | 0.1902 | nan    | 0.1903 |
+| moead_cheby   | 23    | 0.0080 | 0.0186 | 0.0186   | 0.1880 | nan    | 0.1877 |
+| moead_mod_linear | 23    | 0.0077 | 0.0189 | 0.0189   | 0.1916 | nan    | 0.1899 |
+| moead_mod_cheby | 23    | 0.0081 | 0.0200 | 0.0200   | 0.1866 | nan    | 0.1875 |
+| nsga2         | 23    | 0.0080 | 0.0282 | 0.0282   | 0.1876 | nan    | 0.1868 |
+| moead_linear  | 24    | 0.0074 | 0.0182 | 0.0182   | 0.1896 | nan    | 0.1901 |
+| moead_cheby   | 24    | 0.0078 | 0.0187 | 0.0187   | 0.1871 | nan    | 0.1880 |
+| moead_mod_linear | 24    | 0.0075 | 0.0194 | 0.0194   | 0.1891 | nan    | 0.1899 |
+| moead_mod_cheby | 24    | 0.0078 | 0.0202 | 0.0202   | 0.1873 | nan    | 0.1869 |
+| nsga2         | 24    | 0.0079 | 0.0293 | 0.0293   | 0.1852 | nan    | 0.1853 |
+| moead_linear  | 25    | 0.0076 | 0.0177 | 0.0177   | 0.1885 | nan    | 0.1902 |
+| moead_cheby   | 25    | 0.0078 | 0.0183 | 0.0183   | 0.1886 | nan    | 0.1878 |
+| moead_mod_linear | 25    | 0.0075 | 0.0195 | 0.0195   | 0.1901 | nan    | 0.1892 |
+| moead_mod_cheby | 25    | 0.0077 | 0.0187 | 0.0187   | 0.1869 | nan    | 0.1869 |
+| nsga2         | 25    | 0.0078 | 0.0240 | 0.0240   | 0.1883 | nan    | 0.1875 |
+| moead_linear  | 26    | 0.0077 | 0.0180 | 0.0180   | 0.1896 | nan    | 0.1904 |
+| moead_cheby   | 26    | 0.0081 | 0.0185 | 0.0185   | 0.1891 | nan    | 0.1886 |
+| moead_mod_linear | 26    | 0.0078 | 0.0184 | 0.0184   | 0.1886 | nan    | 0.1898 |
+| moead_mod_cheby | 26    | 0.0079 | 0.0199 | 0.0199   | 0.1887 | nan    | 0.1877 |
+| nsga2         | 26    | 0.0079 | 0.0252 | 0.0252   | 0.1873 | nan    | 0.1863 |
+| moead_linear  | 27    | 0.0076 | 0.0177 | 0.0177   | 0.1896 | nan    | 0.1903 |
+| moead_cheby   | 27    | 0.0077 | 0.0184 | 0.0184   | 0.1884 | nan    | 0.1880 |
+| moead_mod_linear | 27    | 0.0077 | 0.0205 | 0.0205   | 0.1904 | nan    | 0.1897 |
+| moead_mod_cheby | 27    | 0.0078 | 0.0188 | 0.0188   | 0.1866 | nan    | 0.1873 |
+| nsga2         | 27    | 0.0077 | 0.0310 | 0.0310   | 0.1856 | nan    | 0.1854 |
+| moead_linear  | 28    | 0.0080 | 0.0184 | 0.0184   | 0.1906 | nan    | 0.1901 |
+| moead_cheby   | 28    | 0.0081 | 0.0185 | 0.0185   | 0.1878 | nan    | 0.1882 |
+| moead_mod_linear | 28    | 0.0076 | 0.0188 | 0.0188   | 0.1898 | nan    | 0.1900 |
+| moead_mod_cheby | 28    | 0.0078 | 0.0187 | 0.0187   | 0.1882 | nan    | 0.1873 |
+| nsga2         | 28    | 0.0077 | 0.0260 | 0.0260   | 0.1870 | nan    | 0.1873 |
+| moead_linear  | 29    | 0.0079 | 0.0176 | 0.0176   | 0.1911 | nan    | 0.1905 |
+| moead_cheby   | 29    | 0.0075 | 0.0187 | 0.0187   | 0.1874 | nan    | 0.1874 |
+| moead_mod_linear | 29    | 0.0076 | 0.0187 | 0.0187   | 0.1906 | nan    | 0.1899 |
+| moead_mod_cheby | 29    | 0.0077 | 0.0198 | 0.0198   | 0.1871 | nan    | 0.1871 |
+| nsga2         | 29    | 0.0079 | 0.0276 | 0.0276   | 0.1866 | nan    | 0.1859 |
+| moead_linear  | 30    | 0.0075 | 0.0175 | 0.0175   | 0.1897 | nan    | 0.1904 |
+| moead_cheby   | 30    | 0.0078 | 0.0186 | 0.0186   | 0.1877 | nan    | 0.1885 |
+| moead_mod_linear | 30    | 0.0078 | 0.0193 | 0.0193   | 0.1907 | nan    | 0.1896 |
+| moead_mod_cheby | 30    | 0.0077 | 0.0205 | 0.0205   | 0.1854 | nan    | 0.1869 |
+| nsga2         | 30    | 0.0080 | 0.0279 | 0.0279   | 0.1845 | nan    | 0.1846 |
 
 \newpage
 \thispagestyle{empty}

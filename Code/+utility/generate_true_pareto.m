@@ -133,7 +133,7 @@ function [Z, ref_point] = generate_true_pareto(problem_number, n_points)
             
             % Apply non-dominated sorting to extract Pareto-optimal solutions
             % The function assigns a rank to each point based on domination; rank 1 means Pareto front
-            sorted = non_domination_sort_mod(population, 2, 2);
+            sorted = utility.non_domination_sort_mod(population, 2, 2);
             
             % Step 5: Select only the points belonging to the first non-dominated front (rank = 1)
             % Extract columns corresponding to the objective values: f1 (col 3), f2 (col 4)
@@ -169,7 +169,7 @@ function [Z, ref_point] = generate_true_pareto(problem_number, n_points)
             % Step 4: Non-dominated sorting of the full population
             % Format: [decision variables | objectives]
             population = [X, f1, f2];  % size: n_samples x (V + 2)
-            sorted = non_domination_sort_mod(population, 2, V);
+            sorted = utility.non_domination_sort_mod(population, 2, V);
         
             % Step 5: Extract first non-dominated front (rank = 1)
             Z = sorted(sorted(:, V+3) == 1, V+1:V+2);  % objective values are in columns V+1 and V+2
@@ -215,6 +215,25 @@ function [Z, ref_point] = generate_true_pareto(problem_number, n_points)
             f2 = 1 - exp(-((x + 1/sqrt(2)).^2));
             Z = [f1, f2];
             ref_point = [1.1, 1.1];
+
+        case 11 % DTLZ1 (3 objectives)
+            % Generate a uniform grid over the 3D simplex: f1 + f2 + f3 = 0.5
+            n_grid = ceil(sqrt(n_points));
+            f1 = linspace(0, 0.5, n_grid);
+            f2 = linspace(0, 0.5, n_grid);
+            [F1, F2] = meshgrid(f1, f2);
+            
+            % Flatten and compute f3
+            F1 = F1(:);
+            F2 = F2(:);
+            F3 = 0.5 - F1 - F2;
+            
+            % Keep only valid (non-negative) solutions within the simplex
+            valid = F3 >= 0;
+            Z = [F1(valid), F2(valid), F3(valid)];
+            
+            % Reference point slightly beyond the true Pareto front support
+            ref_point = [0.6, 0.6, 0.6];
 
         otherwise
             error('Unknown problem number. Must be 1 to 10.');
